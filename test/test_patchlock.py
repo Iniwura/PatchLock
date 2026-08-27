@@ -79,7 +79,7 @@ def setup(
     status=200,
     body="Evidence names PatchLock Demo 1.2.3 and the registered commit.",
 ):
-    actual_urls = REVIEW_URLS[:1] if urls is None else urls
+    actual_urls = SOURCE_URLS[:] if urls is None else urls
     direct_vm.clear_mocks()
     for url in actual_urls:
         direct_vm.mock_web(url, {"method": "GET", "status": status, "body": body})
@@ -95,7 +95,7 @@ def setup(
 
 
 def setup_raw_llm(direct_vm, response, urls=None):
-    actual_urls = REVIEW_URLS[:1] if urls is None else urls
+    actual_urls = SOURCE_URLS[:] if urls is None else urls
     direct_vm.clear_mocks()
     for url in actual_urls:
         direct_vm.mock_web(url, {"method": "GET", "status": 200, "body": "release evidence"})
@@ -109,7 +109,9 @@ def review(
     claimed_risk="No known material risk",
     urls=None,
 ):
-    actual_urls = REVIEW_URLS[:1] if urls is None else urls
+    actual_urls = SOURCE_URLS[:] if urls is None else urls
+    if not get_release(contract, release_id).sealed:
+        contract.seal_release(release_id)
     return contract.review_release(release_id, title, claimed_risk, actual_urls)
 
 
@@ -134,6 +136,7 @@ def test_valid_release_persists_exact_identity_policy_and_sources(
     assert stored.manifest_hash == MANIFEST
     assert stored.sbom_hash == SBOM
     assert stored.release_policy == POLICY
+    assert stored.sealed is False
     assert stored.policy_version == 1
     assert list(stored.evidence_sources) == SOURCE_URLS
     assert stored.source_set_version == 1
@@ -367,12 +370,12 @@ def test_review_rejects_non_http_urls(direct_vm, direct_deploy, url):
     contract = deploy(direct_vm, direct_deploy)
     register(contract)
     with direct_vm.expect_revert("HTTP(S)"):
-        review(contract, urls=[url])
+        review(contract, urls=[url] + REVIEW_URLS[1:])
 
 
 def test_one_evidence_url_is_valid(direct_vm, direct_deploy):
     contract = deploy(direct_vm, direct_deploy)
-    register(contract)
+    register(contract, evidence_sources=REVIEW_URLS[:1])
     setup(direct_vm, urls=REVIEW_URLS[:1])
     assert int(review(contract, urls=REVIEW_URLS[:1])) == 1
 
@@ -444,9 +447,9 @@ def test_mixed_transport_failure_and_http_response_reaches_llm(
     direct_vm, direct_deploy
 ):
     contract = deploy(direct_vm, direct_deploy)
-    register(contract)
     unavailable = REVIEW_URLS[0]
     available = REVIEW_URLS[1]
+    register(contract, evidence_sources=[unavailable, available])
     direct_vm.clear_mocks()
     direct_vm.mock_web(
         available, {"method": "GET", "status": 404, "body": "release evidence"}
@@ -733,6 +736,7 @@ def test_review_does_not_require_owner_signature(
     contract = deploy(direct_vm, direct_deploy)
     direct_vm.sender = direct_alice
     register(contract)
+    contract.seal_release(1)
     direct_vm.sender = direct_bob
     setup(direct_vm, verdict="CAUTION", release_binding="BOUND")
     review(contract)
@@ -780,8 +784,8 @@ def test_review_history_is_append_only_and_readable(direct_vm, direct_deploy):
 
 def test_review_stores_urls_and_sequence(direct_vm, direct_deploy):
     contract = deploy(direct_vm, direct_deploy)
-    register(contract)
     urls = REVIEW_URLS[:2]
+    register(contract, evidence_sources=urls)
     setup(direct_vm, urls=urls, verdict="CAUTION")
     review_id = review(contract, urls=urls)
     stored = get_review(contract, review_id)
@@ -951,7 +955,7 @@ def test_blocked_release_cannot_authorize_even_if_reactivated(direct_vm, direct_
 
 def test_configured_source_is_accepted_exactly(direct_vm, direct_deploy):
     contract = deploy(direct_vm, direct_deploy)
-    register(contract)
+    register(contract, evidence_sources=[REVIEW_URLS[0]])
     setup(direct_vm, urls=[REVIEW_URLS[0]])
     assert review(contract, urls=[REVIEW_URLS[0]]) == 1
 
@@ -959,8 +963,8 @@ def test_configured_source_is_accepted_exactly(direct_vm, direct_deploy):
 @pytest.mark.parametrize(
     "urls",
     [
-        ["https://unregistered.example/advisory"],
-        [REVIEW_URLS[0], "https://unregistered.example/advisory"],
+        ["https://unregistered.example/advisory"] + REVIEW_URLS[1:],
+        [REVIEW_URLS[0], "https://unregistered.example/advisory"] + REVIEW_URLS[2:],
     ],
 )
 def test_unconfigured_or_mixed_sources_are_rejected(direct_vm, direct_deploy, urls):
@@ -984,19 +988,19 @@ def test_alternate_source_spelling_cannot_bypass_exact_membership(
     contract = deploy(direct_vm, direct_deploy)
     register(contract)
     with direct_vm.expect_revert("not in the frozen source set"):
-        review(contract, urls=[url])
+        review(contract, urls=[url] + REVIEW_URLS[1:])
 
 
-def test_fourteen_configured_sources_are_stored_and_reviewable(
+def test_four_configured_sources_are_stored_and_reviewable(
     direct_vm, direct_deploy
 ):
     contract = deploy(direct_vm, direct_deploy)
-    sources = TOO_MANY_SOURCES[:14]
+    sources = TOO_MANY_SOURCES[:4]
     register(contract, evidence_sources=sources)
-    setup(direct_vm, urls=sources[:1])
-    review_id = review(contract, urls=sources[:1])
+    setup(direct_vm, urls=sources)
+    review_id = review(contract, urls=sources)
     assert list(get_release(contract).evidence_sources) == sources
-    assert list(get_review(contract, review_id).evidence_urls) == sources[:1]
+    assert list(get_review(contract, review_id).evidence_urls) == sources
 
 
 def test_policy_version_is_system_controlled_and_monotonic(
@@ -1031,8 +1035,8 @@ def test_review_snapshots_current_policy_and_source_versions(
     register(contract)
     contract.update_release_policy(1, "Updated policy")
     contract.update_evidence_sources(1, SOURCE_URLS[:2])
-    setup(direct_vm, urls=SOURCE_URLS[:1])
-    review_id = review(contract, urls=SOURCE_URLS[:1])
+    setup(direct_vm, urls=SOURCE_URLS[:2])
+    review_id = review(contract, urls=SOURCE_URLS[:2])
     stored = get_review(contract, review_id)
     assert stored.policy_version == 2
     assert stored.source_set_version == 2
@@ -1134,16 +1138,19 @@ def test_malformed_result_does_not_start_review(
     with direct_vm.expect_revert("Malformed verdict JSON"):
         review(contract)
     assert get_release(contract).review_started is False
+    assert get_release(contract).sealed is True
     assert int(contract.get_review_count()) == 0
     assert get_review(contract, 1) is None
-    contract.update_release_policy(1, "Retry policy")
-    contract.update_evidence_sources(1, [REVIEW_URLS[1]])
+    with direct_vm.expect_revert("locked after seal"):
+        contract.update_release_policy(1, "Retry policy")
+    with direct_vm.expect_revert("locked after seal"):
+        contract.update_evidence_sources(1, [REVIEW_URLS[1]])
     stored = get_release(contract)
     assert stored.review_started is False
-    assert stored.release_policy == "Retry policy"
-    assert stored.policy_version == 2
-    assert list(stored.evidence_sources) == [REVIEW_URLS[1]]
-    assert stored.source_set_version == 2
+    assert stored.release_policy == POLICY
+    assert stored.policy_version == 1
+    assert list(stored.evidence_sources) == SOURCE_URLS
+    assert stored.source_set_version == 1
 
 def test_nondeterministic_evaluation_exception_does_not_start_review(
     direct_vm, direct_deploy
@@ -1164,6 +1171,7 @@ def test_nondeterministic_evaluation_exception_does_not_start_review(
         review(contract)
     assert get_release(contract).review_started is False
     assert int(contract.get_review_count()) == 0
+    assert get_release(contract).sealed is True
     assert get_review(contract, 1) is None
 
 
@@ -1190,14 +1198,15 @@ def test_duplicate_review_urls_are_rejected(direct_vm, direct_deploy):
     contract = deploy(direct_vm, direct_deploy)
     register(contract)
     with direct_vm.expect_revert("duplicates"):
-        review(contract, urls=[REVIEW_URLS[0], REVIEW_URLS[0]])
+        review(contract, urls=[REVIEW_URLS[0], REVIEW_URLS[0]] + REVIEW_URLS[1:3])
 
 
 def test_url_order_cannot_grind_same_evidence_packet(direct_vm, direct_deploy):
     contract = deploy(direct_vm, direct_deploy)
-    register(contract)
     urls = REVIEW_URLS[:2]
+    register(contract, evidence_sources=urls)
     setup(direct_vm, urls=urls, verdict="CAUTION")
+    contract.seal_release(1)
     review(contract, urls=urls)
     setup(direct_vm, urls=list(reversed(urls)), verdict="CLEAR")
     with direct_vm.expect_revert("already reviewed"):
@@ -1226,6 +1235,7 @@ def test_release_signer_and_identity_survive_permissionless_reviews(
     contract = deploy(direct_vm, direct_deploy)
     direct_vm.sender = direct_alice
     register(contract)
+    contract.seal_release(1)
     owner = get_release(contract).release_signer
     direct_vm.sender = direct_bob
     setup(direct_vm, verdict="CAUTION")
@@ -1238,3 +1248,356 @@ def test_release_signer_and_identity_survive_permissionless_reviews(
     assert stored.artifact_hash == ARTIFACT
     assert stored.manifest_hash == MANIFEST
     assert stored.sbom_hash == SBOM
+
+
+
+def test_unsealed_release_cannot_be_reviewed_and_remains_editable(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    with direct_vm.expect_revert("must be sealed"):
+        contract.review_release(
+            1, "Security review", "No known material risk", SOURCE_URLS
+        )
+    stored = get_release(contract)
+    assert stored.sealed is False
+    assert stored.review_started is False
+    assert stored.review_count == 0
+    assert contract.get_review_count() == 0
+    contract.update_release_policy(1, "Updated before seal")
+    contract.update_evidence_sources(1, SOURCE_URLS[:2])
+    stored = get_release(contract)
+    assert stored.policy_version == 2
+    assert stored.source_set_version == 2
+
+
+def test_seal_is_owner_only_irreversible_and_does_not_start_review(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = deploy(direct_vm, direct_deploy)
+    direct_vm.sender = direct_alice
+    register(contract)
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("Only release owner"):
+        contract.seal_release(1)
+    direct_vm.sender = direct_alice
+    contract.seal_release(1)
+    stored = get_release(contract)
+    assert stored.sealed is True
+    assert stored.review_started is False
+    with direct_vm.expect_revert("already sealed"):
+        contract.seal_release(1)
+
+
+def test_no_unseal_surface_exists(direct_vm, direct_deploy):
+    contract = deploy(direct_vm, direct_deploy)
+    assert not hasattr(contract, "unseal_release")
+
+
+def test_active_state_remains_independent_after_seal(direct_vm, direct_deploy):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.seal_release(1)
+    contract.set_release_active(1, False)
+    assert get_release(contract).active is False
+    contract.set_release_active(1, True)
+    assert get_release(contract).active is True
+    assert contract.can_release(1) is False
+
+
+def test_failed_sealed_review_preserves_frozen_state_and_history(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.seal_release(1)
+    setup_raw_llm(direct_vm, '{"verdict": "CLEAR"')
+    with direct_vm.expect_revert("Malformed verdict JSON"):
+        contract.review_release(
+            1, "Security review", "No known material risk", SOURCE_URLS
+        )
+    stored = get_release(contract)
+    assert stored.sealed is True
+    assert stored.review_started is False
+    assert stored.review_count == 0
+    assert stored.latest_verdict == "UNDETERMINED"
+    assert stored.latest_release_binding == "UNBOUND"
+    assert stored.blocked is False
+    assert contract.get_review_count() == 0
+    assert contract.get_review(1) is None
+
+
+def test_successful_review_sets_review_started_and_snapshots_sealed_versions(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.update_release_policy(1, "Updated policy")
+    replacement = SOURCE_URLS[:2]
+    contract.update_evidence_sources(1, replacement)
+    contract.seal_release(1)
+    setup(direct_vm, urls=replacement, verdict="CAUTION")
+    review_id = review(contract, urls=replacement)
+    stored = get_release(contract)
+    stored_review = get_review(contract, review_id)
+    assert stored.sealed is True
+    assert stored.review_started is True
+    assert stored_review.policy_version == 2
+    assert stored_review.source_set_version == 2
+    assert stored.policy_version == 2
+    assert stored.source_set_version == 2
+
+
+def test_policy_and_sources_are_locked_immediately_after_seal(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.seal_release(1)
+    with direct_vm.expect_revert("locked after seal"):
+        contract.update_release_policy(1, "Changed after seal")
+    with direct_vm.expect_revert("locked after seal"):
+        contract.update_evidence_sources(1, SOURCE_URLS[:2])
+    stored = get_release(contract)
+    assert stored.policy_version == 1
+    assert stored.source_set_version == 1
+
+
+def test_review_subset_is_rejected_before_nondeterministic_evaluation(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    sources = REVIEW_URLS[:2]
+    register(contract, evidence_sources=sources)
+    contract.seal_release(1)
+    with direct_vm.expect_revert("complete frozen evidence source set"):
+        contract.review_release(1, "Subset", "A favorable source", [sources[0]])
+    assert contract.get_review_count() == 0
+    assert get_release(contract).review_started is False
+
+
+def test_review_superset_is_rejected(direct_vm, direct_deploy):
+    contract = deploy(direct_vm, direct_deploy)
+    sources = REVIEW_URLS[:2]
+    register(contract, evidence_sources=sources)
+    contract.seal_release(1)
+    with direct_vm.expect_revert("complete frozen evidence source set"):
+        contract.review_release(
+            1,
+            "Superset",
+            "An extra source",
+            sources + ["https://unregistered.example/source"],
+        )
+    assert contract.get_review_count() == 0
+
+
+def test_review_duplicate_is_rejected_even_when_length_matches(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    sources = REVIEW_URLS[:2]
+    register(contract, evidence_sources=sources)
+    contract.seal_release(1)
+    with direct_vm.expect_revert("duplicates"):
+        contract.review_release(1, "Duplicate", "Duplicate source", [sources[0], sources[0]])
+    assert contract.get_review_count() == 0
+
+
+def test_reviewer_cannot_cherry_pick_favorable_source_from_release_3_pattern(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    pass_source = "https://release-3.example/pass"
+    fail_source = "https://release-3.example/critical-fail"
+    register(contract, evidence_sources=[pass_source, fail_source])
+    contract.seal_release(1)
+
+    def unexpected_llm(_request):
+        raise AssertionError("subset must be rejected before evaluation")
+
+    direct_vm._live_llm_handler = unexpected_llm
+    with direct_vm.expect_revert("complete frozen evidence source set"):
+        contract.review_release(
+            1, "Release 3 subset", "Only the favorable filing", [pass_source]
+        )
+    assert contract.get_review_count() == 0
+    assert get_release(contract).blocked is False
+
+
+def test_evaluator_receives_every_frozen_source_in_reversed_order(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    sources = SOURCE_URLS[:]
+    register(contract, evidence_sources=sources)
+    contract.seal_release(1)
+    direct_vm.clear_mocks()
+    for url in sources:
+        direct_vm.mock_web(url, {"method": "GET", "status": 200, "body": "full packet"})
+    prompts = []
+
+    def capture_llm(request):
+        prompts.append(request)
+        return {"ok": {
+            "verdict": "CAUTION",
+            "release_binding": "BOUND",
+            "reasoning": "All frozen sources were reviewed.",
+            "evidence_summary": "Complete source set.",
+        }}
+
+    direct_vm._live_llm_handler = capture_llm
+    review_id = contract.review_release(
+        1, "Full source review", "Complete source set", list(reversed(sources))
+    )
+    assert review_id == 1
+    assert len(prompts) == 1
+    prompt_text = str(prompts[0])
+    assert all(url in prompt_text for url in sources)
+
+
+def test_same_packet_different_review_prose_is_rejected(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.seal_release(1)
+    setup(direct_vm, verdict="CAUTION")
+    review(contract, title="First title", claimed_risk="First risk")
+    with direct_vm.expect_revert("already reviewed"):
+        review(contract, title="Different title", claimed_risk="Different risk")
+    assert contract.get_review_count() == 1
+
+
+def test_validator_rejects_forged_commitment_even_when_verdict_and_binding_match(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.seal_release(1)
+    setup(direct_vm, verdict="CAUTION", release_binding="BOUND")
+    review_id = review(contract)
+    stored = get_review(contract, review_id)
+    forged = {
+        "verdict": stored.verdict,
+        "release_binding": stored.release_binding,
+        "reasoning": stored.reasoning,
+        "evidence_summary": stored.evidence_summary,
+        "evidence_commitment": "0" * 64,
+    }
+    assert direct_vm.run_validator(leader_result=forged) is False
+
+
+@pytest.mark.parametrize("bad_commitment", ["", "a" * 63, "g" * 64, 7, None])
+def test_malformed_commitment_is_rejected_by_validator(
+    direct_vm, direct_deploy, bad_commitment
+):
+    contract = deploy(direct_vm, direct_deploy)
+    register(contract)
+    contract.seal_release(1)
+    setup(direct_vm, verdict="CAUTION", release_binding="BOUND")
+    review(contract)
+    stored = get_review(contract, 1)
+    leader = {
+        "verdict": stored.verdict,
+        "release_binding": stored.release_binding,
+        "reasoning": stored.reasoning,
+        "evidence_summary": stored.evidence_summary,
+        "evidence_commitment": bad_commitment,
+    }
+    assert direct_vm.run_validator(leader_result=leader) is False
+
+
+def test_evidence_commitment_is_order_invariant_but_packet_sensitive(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    module = sys.modules[type(contract).__module__]
+    evidence = [
+        {"url": url, "status": 200, "body": "same body"} for url in SOURCE_URLS
+    ]
+
+    def make_commitment(
+        evidence_packet=evidence,
+        sbom=SBOM,
+        policy_version=1,
+        source_set_version=1,
+        source_urls=SOURCE_URLS,
+        evidence_urls=SOURCE_URLS,
+    ):
+        return module._evidence_commitment(
+            "1",
+            PROJECT,
+            VERSION,
+            COMMIT,
+            ARTIFACT,
+            MANIFEST,
+            sbom,
+            policy_version,
+            source_set_version,
+            source_urls,
+            evidence_urls,
+            evidence_packet,
+        )
+
+    base = make_commitment()
+    assert base == make_commitment(
+        evidence_packet=list(reversed(evidence)),
+        source_urls=list(reversed(SOURCE_URLS)),
+        evidence_urls=list(reversed(SOURCE_URLS)),
+    )
+    assert base != make_commitment(
+        evidence_packet=[
+            {"url": url, "status": 200, "body": "changed body"} for url in SOURCE_URLS
+        ]
+    )
+    assert base != make_commitment(
+        evidence_packet=[
+            {"url": url, "status": 500, "body": "same body"} for url in SOURCE_URLS
+        ]
+    )
+    assert base != make_commitment(sbom="sha256:" + "e" * 64)
+    assert base != make_commitment(policy_version=2)
+    assert base != make_commitment(source_set_version=2)
+
+def test_partial_transport_failure_cannot_authorize_clear(
+    direct_vm, direct_deploy
+):
+    contract = deploy(direct_vm, direct_deploy)
+    unavailable = REVIEW_URLS[0]
+    available = REVIEW_URLS[1]
+    register(contract, evidence_sources=[unavailable, available])
+    direct_vm.clear_mocks()
+    direct_vm.mock_web(
+        available, {"method": "GET", "status": 200, "body": "release evidence"}
+    )
+    direct_vm.mock_llm(
+        PROMPT_MARKER,
+        {
+            "verdict": "CLEAR",
+            "release_binding": "BOUND",
+            "reasoning": "A favorable evaluator proposal.",
+            "evidence_summary": "One source was unavailable.",
+        },
+    )
+
+    def failing_web(request):
+        if request.get("url") == unavailable:
+            raise TimeoutError("unavailable")
+        return {
+            "ok": {
+                "response": {
+                    "status": 200,
+                    "headers": {},
+                    "body": b"release evidence",
+                }
+            }
+        }
+
+    direct_vm._live_web_handler = failing_web
+    review_id = review(contract, urls=[unavailable, available])
+    stored = get_release(contract)
+    assert get_review(contract, review_id).verdict == "UNDETERMINED"
+    assert stored.latest_verdict == "UNDETERMINED"
+    assert stored.blocked is False
+    assert contract.can_release(1) is False

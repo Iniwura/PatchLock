@@ -7,7 +7,7 @@ from genlayer import *
 
 
 MAX_BODY = 4000
-MAX_SOURCE_URLS = 14
+MAX_SOURCE_URLS = 4
 VERDICTS = ("CLEAR", "CAUTION", "BLOCKED", "UNDETERMINED")
 RELEASE_BINDINGS = ("BOUND", "PARTIAL", "UNBOUND")
 RESULT_KEYS = ("verdict", "release_binding", "reasoning", "evidence_summary")
@@ -29,6 +29,7 @@ class Release:
     policy_version: u256
     evidence_sources: DynArray[str]
     source_set_version: u256
+    sealed: bool
     review_started: bool
     review_count: u256
     latest_verdict: str
@@ -135,7 +136,19 @@ def _strict_result(result):
         raise gl.vm.UserError("Invalid verdict")
     if result["release_binding"] not in RELEASE_BINDINGS:
         raise gl.vm.UserError("Invalid release binding")
+
     return {key: result[key] for key in RESULT_KEYS}
+def _validate_evidence_commitment(value):
+    if not isinstance(value, str) or len(value) != 64:
+        raise gl.vm.UserError("Evidence commitment must be 64 hexadecimal characters")
+    for character in value:
+        if character not in "0123456789abcdefABCDEF":
+            raise gl.vm.UserError(
+
+
+                "Evidence commitment must be 64 hexadecimal characters"
+            )
+    return value
 
 
 def _evaluate_release(
@@ -189,8 +202,15 @@ def _evaluate_release(
         "established block. UNDETERMINED covers unavailable, conflicting, "
         "insufficient, or unbound evidence. "
         "A real HTTP response, including 4xx/5xx or an empty body, is usable "
-        "evidence; transport failure is unavailable. HTTP status alone never "
-        "implies vulnerability or safety. "
+        "evidence; transport failure is unavailable. HTTP status alone never implies vulnerability or safety. "
+        "These are the complete frozen evidence source set. Every configured "
+        "source was fetched for this review. Blocking evidence from any "
+        "sufficiently bound source must be considered. A favorable source must "
+        "not erase or ignore conflicting blocking evidence. Conflicting "
+        "evidence should normally yield BLOCKED when a valid policy blocking "
+        "condition is established; otherwise use CAUTION or UNDETERMINED as "
+        "appropriate. CLEAR requires the complete evidence packet to support "
+        "shipment. "
         "DO NOT treat evidence as release-specific unless its content can "
         "reasonably be tied to the registered version, build, commit, "
         "artifact, manifest, or SBOM identity. Generic project evidence or an "
@@ -198,7 +218,7 @@ def _evaluate_release(
         "Do not add any other JSON fields.\n"
         "PROJECT_NAME:%s\nVERSION:%s\nCOMMIT_HASH:%s\nARTIFACT_HASH:%s\n"
         "MANIFEST_HASH:%s\nSBOM_HASH:%s\nRELEASE_POLICY:%s\nPOLICY_VERSION:%s\n"
-        "SOURCE_SET_VERSION:%s\nCONFIGURED_EVIDENCE_SOURCES:%s\n"
+        "SOURCE_SET_VERSION:%s\nFROZEN_EVIDENCE_SOURCE_SET:%s\n"
         "REVIEW_TITLE:%s\nCLAIMED_RISK:%s\nEVIDENCE:%s"
         % (
             PROMPT_MARKER,
@@ -219,6 +239,16 @@ def _evaluate_release(
     )
     result = gl.nondet.exec_prompt(prompt, response_format="json")
     validated = _strict_result(result)
+    evidence_incomplete = False
+    for item in evidence:
+        if item.get("status") == "unavailable":
+            evidence_incomplete = True
+    if evidence_incomplete and validated["verdict"] == "CLEAR":
+        validated["verdict"] = "UNDETERMINED"
+        validated["reasoning"] = (
+            "Clear result rejected because a frozen evidence source was unavailable. "
+            + validated["reasoning"]
+        )
     validated["evidence_commitment"] = commitment
     return validated
 
@@ -255,7 +285,7 @@ class PatchLock(gl.Contract):
 
     def _validate_source_urls(self, urls):
         if len(urls) < 1 or len(urls) > MAX_SOURCE_URLS:
-            raise gl.vm.UserError("Evidence source set must contain 1 to 14 URLs")
+            raise gl.vm.UserError("Evidence source set must contain 1 to 4 URLs")
         seen = []
         for url in urls:
             if url in seen:
@@ -265,8 +295,10 @@ class PatchLock(gl.Contract):
                 raise gl.vm.UserError("Evidence sources must use HTTP(S)")
 
     def _validate_review_urls(self, urls, source_urls):
-        if len(urls) < 1 or len(urls) > 4:
-            raise gl.vm.UserError("Evidence URLs must contain 1 to 4 URLs")
+        if len(urls) != len(source_urls):
+            raise gl.vm.UserError(
+                "Review must include the complete frozen evidence source set"
+            )
         seen = []
         for url in urls:
             if url in seen:
@@ -277,6 +309,14 @@ class PatchLock(gl.Contract):
 
             if url not in source_urls:
                 raise gl.vm.UserError("Evidence URL is not in the frozen source set")
+
+        for source_url in source_urls:
+            if source_url not in seen:
+                raise gl.vm.UserError(
+                    "Review must include the complete frozen evidence source set"
+                )
+
+
     @gl.public.write
     def register_release(
         self,
@@ -312,6 +352,7 @@ class PatchLock(gl.Contract):
             evidence_sources,
             u256(1),
             False,
+            False,
             u256(0),
             "UNDETERMINED",
             "UNBOUND",
@@ -324,10 +365,18 @@ class PatchLock(gl.Contract):
         return release_id
 
     @gl.public.write
+    def seal_release(self, release_id: u256):
+        release = self._owned(release_id)
+        if release.sealed:
+            raise gl.vm.UserError("Release is already sealed")
+        release.sealed = True
+        self.releases[release_id] = release
+
+    @gl.public.write
     def update_release_policy(self, release_id: u256, release_policy: str):
         release = self._owned(release_id)
-        if release.review_started:
-            raise gl.vm.UserError("Release policy is locked after review starts")
+        if release.sealed:
+            raise gl.vm.UserError("Release policy is locked after seal")
         self._require_text(release_policy, "Release policy is required")
         release.release_policy = release_policy
         release.policy_version = release.policy_version + 1
@@ -338,8 +387,8 @@ class PatchLock(gl.Contract):
         self, release_id: u256, evidence_sources: list[str]
     ):
         release = self._owned(release_id)
-        if release.review_started:
-            raise gl.vm.UserError("Evidence sources are locked after review starts")
+        if release.sealed:
+            raise gl.vm.UserError("Evidence sources are locked after seal")
         self._validate_source_urls(evidence_sources)
         release.evidence_sources = evidence_sources
         release.source_set_version = release.source_set_version + 1
@@ -361,6 +410,8 @@ class PatchLock(gl.Contract):
         evidence_urls: list[str],
     ) -> u256:
         release = self._release(release_id)
+        if not release.sealed:
+            raise gl.vm.UserError("Release must be sealed before review")
         self._require_text(title, "Review title is required")
         self._require_text(claimed_risk, "Claimed risk is required")
 
@@ -375,12 +426,12 @@ class PatchLock(gl.Contract):
         policy_version = str(memory.policy_version)
         source_urls = tuple(str(url) for url in memory.evidence_sources)
         source_set_version = str(memory.source_set_version)
-        self._validate_review_urls(evidence_urls, source_urls)
         policy_version_value = memory.policy_version
         source_set_version_value = memory.source_set_version
         review_title = str(title)
         review_claimed_risk = str(claimed_risk)
         review_urls = tuple(str(url) for url in evidence_urls)
+        self._validate_review_urls(review_urls, source_urls)
         review_release_id = str(release_id)
 
 
@@ -411,6 +462,8 @@ class PatchLock(gl.Contract):
                     and candidate.get("verdict") == leader.calldata.get("verdict")
                     and candidate.get("release_binding")
                     == leader.calldata.get("release_binding")
+                    and candidate.get("evidence_commitment")
+                    == leader.calldata.get("evidence_commitment")
                 )
             except Exception:
                 return False
@@ -421,10 +474,10 @@ class PatchLock(gl.Contract):
             or len(result) != len(RESULT_KEYS) + 1
             or "evidence_commitment" not in result
             or not isinstance(result["evidence_commitment"], str)
-            or not result["evidence_commitment"]
         ):
             raise gl.vm.UserError("Nondeterministic result shape is invalid")
         evidence_commitment = result["evidence_commitment"]
+        _validate_evidence_commitment(evidence_commitment)
         result = _strict_result({key: result.get(key) for key in RESULT_KEYS})
         if self.evidence_commitments.get(evidence_commitment, False):
             raise gl.vm.UserError("Evidence packet was already reviewed")
