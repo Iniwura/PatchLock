@@ -31,7 +31,7 @@ const NAV_ITEMS = [
   ['releases', 'RELEASES'],
   ['review-queue', 'REVIEW QUEUE'],
   ['deployment', 'DEPLOYMENT GATE'],
-  ['policy', 'POLICY STANDARD'],
+  ['policy-standard', 'POLICY STANDARD'],
 ];
 
 function currentRoute() {
@@ -58,6 +58,19 @@ function routeInfo(route) {
 
 function formatReleaseId(value) {
   return String(numberValue(value)).padStart(3, '0');
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function uniqueValues(values) {
+  return new Set(values).size === values.length;
 }
 
 function arrayEqual(left, right) {
@@ -110,10 +123,14 @@ function HashValue({ value, label = 'HASH' }) {
 }
 
 function Field({ label, hint, children, className = '' }) {
+  const fieldId = React.useId();
+  const hintId = `${fieldId}-hint`;
+  const nativeControl = React.isValidElement(children) && typeof children.type === 'string';
+  const control = nativeControl ? React.cloneElement(children, { id: children.props.id || fieldId, ...(hint ? { 'aria-describedby': hintId } : {}) }) : children;
   return <div className={`field ${className}`}>
-    <label>{label}</label>
-    {hint && <span className="field-hint">{hint}</span>}
-    {children}
+    <label {...(nativeControl ? { htmlFor: children.props.id || fieldId } : {})}>{label}</label>
+    {hint && <span id={hintId} className="field-hint">{hint}</span>}
+    {control}
   </div>;
 }
 
@@ -134,8 +151,8 @@ function TransactionStatus({ state, onCheck }) {
     submitted: ['TRANSACTION SUBMITTED', 'The write is now with GenLayer.'],
     evaluating: ['GENLAYER CONSENSUS IN PROGRESS', 'Validators are processing the transaction.'],
     accepted: ['CONSENSUS ACCEPTED', 'The transaction is accepted; reading authoritative PatchLock state.'],
-    confirming: ['CONFIRMING RELEASE STATE', 'Waiting for the updated record to be readable.'],
-    confirmed: ['STATE CONFIRMED', state.detail || 'PatchLock state is authoritative.'],
+    confirming: ['CONFIRMING CONTRACT STATE', 'Waiting for the updated record to be readable.'],
+    confirmed: ['RECORDED', state.detail || 'PatchLock state is authoritative.'],
     pending: ['STATE CONFIRMATION PENDING', 'The transaction hash is retained. No second transaction was submitted.'],
     unresolved: ['CONSENSUS UNRESOLVED', 'The receipt did not produce a confirmed state change. No second transaction was submitted.'],
   };
@@ -150,8 +167,13 @@ function TransactionStatus({ state, onCheck }) {
   </section>;
 }
 
-function LoadingState({ label = 'Reading PatchLock state...' }) {
-  return <div className="loading-state" role="status" aria-live="polite"><span className="loading-line" aria-hidden="true" />{label}</div>;
+function LoadingStructure({ variant }) {
+  if (variant === 'gate') return <div className="loading-structure loading-gate" aria-hidden="true"><div className="loading-gate-flow"><span /><span /><span /><span /></div><div className="loading-gate-panel"><span /><span /><span /></div></div>;
+  return <div className={`loading-structure loading-${variant}`} aria-hidden="true"><div className="loading-ledger-head"><span /><span /><span /><span /></div>{[0, 1, 2].map((row) => <div className="loading-ledger-row" key={row}><span /><span /><span /><span /></div>)}</div>;
+}
+
+function LoadingState({ label = 'READING BRADBURY STATE', variant = '' }) {
+  return <div className={`loading-region${variant ? ` loading-region-${variant}` : ''}`} role="status" aria-live="polite"><div className="loading-state"><span className="loading-line" aria-hidden="true" />{label}</div>{variant && <LoadingStructure variant={variant} />}</div>;
 }
 
 function ErrorState({ message, onRetry }) {
@@ -160,17 +182,17 @@ function ErrorState({ message, onRetry }) {
 
 function ConfigurationState() {
   return <section className="configuration-state page-section">
-    <div className="config-stamp">CONFIGURATION REQUIRED</div>
-    <p className="eyebrow">PATCHLOCK / DEPLOYMENT PENDING</p>
-    <h1>NO CONTRACT<br /><em>ADDRESS CONFIGURED.</em></h1>
-    <p className="lede">This interface is intentionally in configuration state. Public reads and wallet writes remain disabled until the deployed PatchLock address is supplied.</p>
+    <div className="config-stamp">CONFIGURATION CHECK</div>
+    <p className="eyebrow">PATCHLOCK / CONFIGURATION</p>
+    <h1>CONTRACT ADDRESS<br /><em>REQUIRES ATTENTION.</em></h1>
+    <p className="lede">The configured PatchLock address is invalid. Public reads are paused until a valid 20-byte contract address is supplied.</p>
     <div className="config-command"><span>ENVIRONMENT KEY</span><code>VITE_PATCHLOCK_CONTRACT_ADDRESS=</code></div>
     <div className="config-notes">
-      <div><span>STATUS</span><strong>NOT DEPLOYED / PENDING</strong></div>
-      <div><span>LIVE RELEASE DATA</span><strong>NOT FABRICATED</strong></div>
+      <div><span>STATUS</span><strong>INVALID CONFIGURATION</strong></div>
+      <div><span>LIVE READS</span><strong>PAUSED / FAIL CLOSED</strong></div>
       <div><span>WALLET MODE</span><strong>INJECTED EIP-1193 ONLY</strong></div>
     </div>
-    <p className="small-print">Set the environment value after deployment and restart the Vite process. No address, transaction hash, or live release is hardcoded here.</p>
+    <p className="small-print">Set the environment value to a valid address and restart the Vite process. No release data is fabricated while configuration is invalid.</p>
   </section>;
 }
 
@@ -215,9 +237,10 @@ function Home({ navigate }) {
     <section className="hero page-section">
       <div className="hero-copy">
         <p className="eyebrow">PATCHLOCK / SOFTWARE RELEASE QUARANTINE</p>
-        <h1>SHIPPING IS A<br /><em>PRIVILEGE.</em></h1>
-        <p className="hero-lede">PatchLock evaluates exact software releases against locked security policy and release-bound evidence before deployment authority is granted.</p>
-        <div className="hero-actions"><ButtonLink href="releases">OPEN RELEASES</ButtonLink><ButtonLink href="register" className="secondary">REGISTER RELEASE</ButtonLink></div>
+        <h1>SHIPPING IS<br /><span className="hero-headline-line">A <em>PRIVILEGE.</em></span></h1>
+        <p className="hero-lede">PatchLock determines whether an exact registered software release may ship under a locked release policy and release-bound evidence.</p>
+        <div className="hero-actions"><ButtonLink href="releases">VIEW RELEASES</ButtonLink><ButtonLink href="register-release" className="secondary">REGISTER RELEASE</ButtonLink><ButtonLink href="deployment" className="text-link">CHECK DEPLOYMENT AUTHORIZATION</ButtonLink></div>
+        <div className="hero-live-status" aria-label="Live Bradbury contract status"><div><span>NETWORK</span><strong>BRADBURY / LIVE</strong></div><div><span>CONTRACT</span><code title={PATCHLOCK_CONTRACT_ADDRESS}>{PATCHLOCK_CONTRACT_ADDRESS}</code></div></div>
         <p className="attestation-note"><span aria-hidden="true">!</span> The interface never substitutes a frontend claim for <code>can_release()</code>.</p>
       </div>
       <div className="hero-document" aria-label="Example release authorization document">
@@ -272,13 +295,13 @@ async function fetchAllReleases(readClient) {
 function RegistryRow({ record, navigate }) {
   const release = record.release;
   const state = releaseState(release, record.allowed);
-  return <a className={`registry-row ${release.blocked ? 'is-blocked' : ''}`} href={`#release/${release.release_id}`}>
-    <div className="registry-id"><span>RELEASE</span><strong>{formatReleaseId(release.release_id)}</strong></div>
-    <div className="registry-project"><strong>{release.project_name}</strong><span>{release.version}</span></div>
+  return <a className={`registry-row ${release.blocked ? 'is-blocked' : ''}`} href={`#release/${release.release_id}`} aria-label={`Open release ${release.release_id} dossier`}>
+    <div className="registry-id"><span>RELEASE ID</span><strong>{formatReleaseId(release.release_id)}</strong></div>
+    <div className="registry-project"><strong>{release.project_name}</strong><span>VERSION / {release.version}</span><small>POLICY V{release.policy_version} / SOURCES V{release.source_set_version}</small></div>
     <HashValue label="COMMIT" value={release.commit_hash} />
     <HashValue label="ARTIFACT" value={release.artifact_hash} />
     <div className="registry-verdict"><StatusPill label={state.label} tone={state.tone} /><small>{release.latest_verdict} / {release.latest_release_binding}</small></div>
-    <div className="registry-active"><span>ACTIVE</span><strong>{release.active ? 'YES' : 'NO'}</strong></div>
+    <div className="registry-active"><span>ACTIVE / BLOCKED</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><small>BLOCKED: {release.blocked ? 'YES' : 'NO'}</small><small>GATE: {record.allowed ? 'AUTHORIZED' : 'DENIED'}</small></div>
     <div className="registry-arrow" aria-hidden="true">&gt;</div>
   </a>;
 }
@@ -298,10 +321,10 @@ function ReleasesPage({ readClient, navigate }) {
   useEffect(() => { load(); }, [load]);
   return <section className="page-section registry-page">
     <PageHeading eyebrow="01 / PUBLIC READS" title="RELEASE REGISTRY">
-      <ButtonLink href="register">REGISTER RELEASE</ButtonLink>
+      <ButtonLink href="register-release">REGISTER RELEASE</ButtonLink>
     </PageHeading>
     <div className="registry-intro"><p>Every registered release stays visible as an engineering record. Blocks, inactive releases, and unresolved reviews are never hidden.</p><button type="button" className="text-button" onClick={load}>REFRESH REGISTRY</button></div>
-    {state.loading ? <LoadingState label="Reading release registry..." /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : records.length === 0 ? <div className="empty-state"><strong>NO RELEASES REGISTERED</strong><span>PatchLock has no live records at this address.</span><ButtonLink href="register" className="secondary">REGISTER THE FIRST RELEASE</ButtonLink></div> : <div className="registry-table" aria-label="Release registry">{records.map((record) => <RegistryRow key={record.id} record={record} navigate={navigate} />)}</div>}
+    {state.loading ? <LoadingState label="READING BRADBURY STATE / RELEASE REGISTRY" variant="registry" /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : records.length === 0 ? <div className="empty-state"><strong>NO RELEASES REGISTERED</strong><span>PatchLock has no live records at this address.</span><ButtonLink href="register-release" className="secondary">REGISTER THE FIRST RELEASE</ButtonLink></div> : <div className="registry-table" aria-label="Release registry">{records.map((record) => <RegistryRow key={record.id} record={record} navigate={navigate} />)}</div>}
   </section>;
 }
 
@@ -322,9 +345,10 @@ function RegisterPage({ readClient, account, write, navigate }) {
   const [error, setError] = useState('');
   const [tx, setTx] = useState(null);
   const checkRef = useRef(null);
+  const expectedIdRef = useRef(null);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const validSources = sources.map((source) => source.trim());
-  const canSubmit = Boolean(account && Object.values(form).every((value) => value.trim()) && validSources.length >= 1 && validSources.length <= 14 && validSources.every((source) => /^https?:\/\//.test(source)));
+  const canSubmit = Boolean(account && Object.values(form).every((value) => value.trim()) && validSources.length >= 1 && validSources.length <= 14 && uniqueValues(validSources) && validSources.every(isHttpUrl));
   const confirmRegistration = useCallback(async (expectedId, hash) => {
     setTx({ phase: 'confirming', hash });
     const found = await pollAuthoritative(
@@ -355,6 +379,7 @@ function RegisterPage({ readClient, account, write, navigate }) {
     try {
       const previous = numberValue(await readPatchLock(readClient, 'get_release_count'));
       const expectedId = previous + 1;
+      expectedIdRef.current = expectedId;
       const result = await write('register_release', [form.project.trim(), form.version.trim(), form.commit.trim(), form.artifact.trim(), form.manifest.trim(), form.sbom.trim(), form.policy.trim(), validSources], {
         onAwaiting: () => setTx({ phase: 'awaiting' }),
         onSubmitted: (hash) => setTx({ phase: 'submitted', hash }),
@@ -371,7 +396,7 @@ function RegisterPage({ readClient, account, write, navigate }) {
     } catch (cause) {
       if (cause?.transactionHash) {
         setTx({ phase: 'unresolved', hash: cause.transactionHash });
-        checkRef.current = async () => confirmRegistration(numberValue(await readPatchLock(readClient, 'get_release_count')) + 1, cause.transactionHash);
+        checkRef.current = () => confirmRegistration(expectedIdRef.current, cause.transactionHash);
       } else {
         setError(transactionErrorMessage(cause));
       }
@@ -391,13 +416,13 @@ function RegisterPage({ readClient, account, write, navigate }) {
           <Field label="MANIFEST HASH"><input required className="mono-input" value={form.manifest} onChange={(event) => update('manifest', event.target.value)} placeholder="release manifest digest" /></Field>
           <Field label="SBOM HASH"><input required className="mono-input" value={form.sbom} onChange={(event) => update('sbom', event.target.value)} placeholder="SBOM digest" /></Field>
         </div></div>
-        <div className="form-block"><div className="form-block-title"><span>RELEASE POLICY</span><small>VERSION 1 AT REGISTRATION</small></div><Field label="POLICY TEXT" hint="This policy is lockable. The first review attempt freezes it."><textarea required rows="6" value={form.policy} onChange={(event) => update('policy', event.target.value)} placeholder="Block release if evidence establishes a known critical vulnerability exploitable in the shipped artifact." /></Field></div>
+        <div className="form-block"><div className="form-block-title"><span>RELEASE POLICY</span><small>VERSION 1 AT REGISTRATION</small></div><Field label="POLICY TEXT" hint="This policy locks after the first successful review."><textarea required rows="6" value={form.policy} onChange={(event) => update('policy', event.target.value)} placeholder="Block release if evidence establishes a known critical vulnerability exploitable in the shipped artifact." /></Field></div>
         <div className="form-block"><div className="form-block-title"><span>EVIDENCE SOURCES</span><small>1-14 EXACT HTTP(S) URLS</small></div><p className="form-explanation">These registered source strings become the release's evidence source set. Once review begins, every review must use exact members of this frozen set.</p><SourceEditor sources={sources} setSources={setSources} /></div>
         <div className="attestation-box"><strong>ONCHAIN REGISTRATION ATTESTATION</strong><p>Your wallet will register these exact release identifiers onchain. The transaction signer becomes the release signer for this record.</p><p>PatchLock does not independently verify an external CI signature. It proves that the GenLayer transaction signer registered the submitted identifiers.</p></div>
         {error && <div className="error-state" role="alert"><strong>REGISTRATION NOT COMPLETE</strong><span>{error}</span></div>}
         <div className="form-submit"><button className="button" type="submit" disabled={!canSubmit || busy}>{busy ? 'RECORDING...' : account ? 'REGISTER EXACT RELEASE' : 'CONNECT WALLET TO REGISTER'}</button><span>Writes require GenLayer Bradbury.</span></div>
       </form>
-      <aside className="form-aside"><p className="eyebrow">REGISTRATION CONTRACT</p><ol className="numbered-list"><li><strong>Exact identity</strong><span>Project, version, commit, artifact, manifest, and SBOM are required.</span></li><li><strong>Signed by sender</strong><span>The transaction wallet is recorded as release_signer.</span></li><li><strong>Policy begins at v1</strong><span>Owner updates increment the system-controlled policy version.</span></li><li><strong>Sources freeze at first review</strong><span>Alternate URL spelling and unregistered sources are rejected.</span></li></ol></aside>
+      <aside className="form-aside"><p className="eyebrow">REGISTRATION CONTRACT</p><ol className="numbered-list"><li><strong>Exact identity</strong><span>Project, version, commit, artifact, manifest, and SBOM are required.</span></li><li><strong>Signed by sender</strong><span>The transaction wallet is recorded as release_signer.</span></li><li><strong>Policy begins at v1</strong><span>Owner updates increment the system-controlled policy version.</span></li><li><strong>Sources freeze after success</strong><span>Alternate URL spelling and unregistered sources are rejected.</span></li></ol></aside>
     </div>
     <TransactionStatus state={tx} onCheck={() => checkRef.current?.()} />
   </section>;
@@ -411,10 +436,19 @@ function OwnerControls({ release, account, readClient, write, onRefresh }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [tx, setTx] = useState(null);
+  const checkRef = useRef(null);
   useEffect(() => { setPolicy(release.release_policy); setSources(release.evidence_sources); }, [release.release_id, release.release_policy, release.evidence_sources.join('|')]);
+  const confirmState = useCallback(async (hash, confirm) => {
+    setTx({ phase: 'confirming', hash });
+    const updated = await pollAuthoritative(() => readPatchLock(readClient, 'get_release', [release.release_id]).then((raw) => normalizeRelease(raw, release.release_id)).catch(() => null), confirm, 12, 2500);
+    if (!updated) { setTx({ phase: 'pending', hash }); return false; }
+    setTx({ phase: 'confirmed', hash, detail: 'PATCHLOCK STATE UPDATED' });
+    await onRefresh();
+    return true;
+  }, [onRefresh, readClient, release.release_id]);
   const run = async (method, args, confirm) => {
     if (busy) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); checkRef.current = null;
     try {
       const result = await write(method, args, {
         onAwaiting: () => setTx({ phase: 'awaiting' }),
@@ -422,23 +456,22 @@ function OwnerControls({ release, account, readClient, write, onRefresh }) {
         onEvaluating: (hash) => setTx({ phase: 'evaluating', hash }),
       });
       setTx({ phase: 'accepted', hash: result.hash });
-      setTx({ phase: 'confirming', hash: result.hash });
-      const updated = await pollAuthoritative(() => readPatchLock(readClient, 'get_release', [release.release_id]).then((raw) => normalizeRelease(raw, release.release_id)).catch(() => null), confirm, 12, 2500);
-      if (!updated) { setTx({ phase: 'pending', hash: result.hash }); return; }
-      setTx({ phase: 'confirmed', hash: result.hash, detail: 'PATCHLOCK STATE UPDATED' });
-      await onRefresh();
+      checkRef.current = () => confirmState(result.hash, confirm);
+      await confirmState(result.hash, confirm);
     } catch (cause) {
-      if (cause?.transactionHash) setTx({ phase: 'unresolved', hash: cause.transactionHash });
-      else setError(transactionErrorMessage(cause));
+      if (cause?.transactionHash) {
+        setTx({ phase: 'unresolved', hash: cause.transactionHash });
+        checkRef.current = () => confirmState(cause.transactionHash, confirm);
+      } else setError(transactionErrorMessage(cause));
     } finally {
       setBusy(false);
     }
   };
   if (!owner) return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="READ ONLY / NOT OWNER" tone="hold" /></div><p>Only the recorded release signer can change pre-review policy, source configuration, or active state.</p></div>;
-  if (release.review_started) return <div className="owner-panel locked-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="POLICY LOCKED / SOURCE SET LOCKED" tone="caution" /></div><p>The first review attempt froze the policy and evidence source set. A changed rule or source configuration requires a new release registration.</p>{release.blocked && <p className="warning-copy">This artifact is permanently blocked. There is no unblock, reset, or pardon control.</p>}<div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div><TransactionStatus state={tx} /></div>;
+  if (release.review_started) return <div className="owner-panel locked-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="POLICY LOCKED / SOURCE SET LOCKED" tone="caution" /></div><p>The first successful review locked the policy and evidence source set. A changed rule or source configuration requires a new release registration.</p>{release.blocked && <p className="warning-copy">This artifact is permanently blocked. There is no unblock, reset, or pardon control.</p>}<div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div><TransactionStatus state={tx} onCheck={() => checkRef.current?.()} /></div>;
   return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / PRE-REVIEW</span><StatusPill label="EDITABLE BEFORE FIRST REVIEW" tone="clear" /></div>
     <div className="owner-control-grid"><div><Field label={`POLICY VERSION ${release.policy_version}`}><textarea rows="5" value={policy} onChange={(event) => setPolicy(event.target.value)} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || !policy.trim() || policy === release.release_policy} onClick={() => run('update_release_policy', [release.release_id, policy.trim()], (updated) => updated && updated.policy_version === release.policy_version + 1 && updated.release_policy === policy.trim())}>UPDATE POLICY / +1</button></div>
-      <div><Field label={`SOURCE SET VERSION ${release.source_set_version}`}><SourceEditor sources={sources} setSources={setSources} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || sources.some((source) => !/^https?:\/\//.test(source.trim())) || arrayEqual(sources.map((source) => source.trim()), release.evidence_sources)} onClick={() => run('update_evidence_sources', [release.release_id, sources.map((source) => source.trim())], (updated) => updated && updated.source_set_version === release.source_set_version + 1 && arrayEqual(updated.evidence_sources, sources.map((source) => source.trim())))}>UPDATE SOURCES / +1</button></div></div>
+      <div><Field label={`SOURCE SET VERSION ${release.source_set_version}`}><SourceEditor sources={sources} setSources={setSources} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || sources.length < 1 || sources.length > 14 || !uniqueValues(sources.map((source) => source.trim())) || sources.some((source) => !isHttpUrl(source.trim())) || arrayEqual(sources.map((source) => source.trim()), release.evidence_sources)} onClick={() => run('update_evidence_sources', [release.release_id, sources.map((source) => source.trim())], (updated) => updated && updated.source_set_version === release.source_set_version + 1 && arrayEqual(updated.evidence_sources, sources.map((source) => source.trim())))}>UPDATE SOURCES / +1</button></div></div>
     <div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div>
     {error && <div className="error-state" role="alert"><strong>OWNER WRITE FAILED</strong><span>{error}</span></div>}<TransactionStatus state={tx} />
   </div>;
@@ -488,9 +521,9 @@ function ReleasePage({ id, readClient, account, write, navigate }) {
     <div className="dossier-header"><div><p className="eyebrow">RELEASE {formatReleaseId(release.release_id)} / SOFTWARE RELEASE RECORD</p><h1>{release.project_name}<span>{release.version}</span></h1></div><div className="dossier-actions"><ButtonLink href={`review/${id}`} className={release.blocked ? 'secondary' : ''}>REVIEW RELEASE</ButtonLink><ButtonLink href="releases" className="text-link">BACK TO REGISTRY</ButtonLink></div></div>
     {release.blocked && <QuarantineSeal release={release} />}
     <div className={`authorization-banner tone-${status.tone}`}><div><span className="eyebrow">CURRENT AUTHORIZATION</span><strong>{release.blocked ? 'RELEASE BLOCKED' : data.allowed ? 'CLEARED FOR RELEASE' : 'QUARANTINE HOLD'}</strong><StatusPill label={status.label} tone={status.tone} /></div><div className="authorization-call"><code>can_release({release.release_id})</code><strong>{data.allowed ? 'TRUE' : 'FALSE'}</strong></div></div>
-    {release.blocked && <div className="permanent-warning" role="note"><strong>THIS ARTIFACT CANNOT BE REHABILITATED IN PLACE.</strong><span>A corrected build must be registered as a new release with a new artifact/build identity.</span></div>}
+    {release.blocked && <div className="permanent-warning" role="note"><strong>THIS ARTIFACT CANNOT BE REHABILITATED IN PLACE.</strong><span>A corrected build must be registered as a new release with a new artifact/build identity.</span><span>REVIEWS REMAIN APPEND-ONLY. PERMANENT QUARANTINE CANNOT BE CLEARED IN PLACE.</span></div>}
     <div className="dossier-block"><div className="section-rule"><span>01 / EXACT RELEASE IDENTITY</span><span>IMMUTABLE</span></div><IdentityGrid release={release} /></div>
-    <div className="dossier-two-column"><div className="dossier-block"><div className="section-rule"><span>02 / POLICY SNAPSHOT</span><span>LOCK {release.review_started ? 'ACTIVE' : 'PENDING'}</span></div><div className="policy-snapshot"><div className="snapshot-meta"><span>POLICY VERSION</span><strong>V{release.policy_version}</strong><span>REVIEW STARTED</span><strong>{release.review_started ? 'YES' : 'NO'}</strong></div><p>{release.release_policy}</p></div></div><div className="dossier-block"><div className="section-rule"><span>03 / EVIDENCE SOURCES</span><span>SET V{release.source_set_version}</span></div><p className="small-print">{release.review_started ? 'Frozen at first review attempt. Reviews may select only exact members.' : 'Owner-editable until the first review attempt.'}</p><div className="source-list">{release.evidence_sources.map((source, index) => <div key={source}><span>{String(index + 1).padStart(2, '0')}</span><code>{source}</code></div>)}</div></div></div>
+    <div className="dossier-two-column"><div className="dossier-block"><div className="section-rule"><span>02 / POLICY SNAPSHOT</span><span>LOCK {release.review_started ? 'ACTIVE' : 'PENDING'}</span></div><div className="policy-snapshot"><div className="snapshot-meta"><span>POLICY VERSION</span><strong>V{release.policy_version}</strong><span>REVIEW STARTED</span><strong>{release.review_started ? 'YES' : 'NO'}</strong></div><p>{release.release_policy}</p></div></div><div className="dossier-block"><div className="section-rule"><span>03 / EVIDENCE SOURCES</span><span>SET V{release.source_set_version}</span></div><p className="small-print">{release.review_started ? 'Frozen after the first successful review. Reviews may select only exact members.' : 'Owner-editable until the first successful review.'}</p><div className="source-list">{release.evidence_sources.map((source, index) => <div key={source}><span>{String(index + 1).padStart(2, '0')}</span><code>{source}</code></div>)}</div></div></div>
     <div className="dossier-block history-block"><div className="section-rule"><span>04 / REVIEW HISTORY</span><span>{release.review_count} RECORD{release.review_count === 1 ? '' : 'S'}</span></div><ReviewTimeline reviews={data.reviews} navigate={navigate} /></div>
     <OwnerControls release={release} account={account} readClient={readClient} write={write} onRefresh={refresh} />
   </section>;
@@ -506,6 +539,8 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
   const [busy, setBusy] = useState(false);
   const [tx, setTx] = useState(null);
   const checkRef = useRef(null);
+  const expectedSequenceRef = useRef(null);
+  const expectedGlobalReviewCountRef = useRef(null);
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
@@ -518,11 +553,12 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
   }, [id, readClient]);
   useEffect(() => { load(); }, [load]);
   const toggleSource = (source) => setSelected((items) => items.includes(source) ? items.filter((item) => item !== source) : items.length < 4 ? [...items, source] : items);
-  const confirmReview = useCallback(async (expectedSequence, hash) => {
+  const confirmReview = useCallback(async (expectedSequence, expectedGlobalCount, hash) => {
     setTx({ phase: 'confirming', hash });
     const found = await pollAuthoritative(
       async () => {
         const count = numberValue(await readPatchLock(readClient, 'get_review_count'));
+        if (count < expectedGlobalCount) return null;
         for (let reviewId = count; reviewId >= 1; reviewId -= 1) {
           const raw = await readPatchLock(readClient, 'get_review', [reviewId]);
           const review = normalizeReview(raw, reviewId);
@@ -545,17 +581,25 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
     if (!release || !account || !title.trim() || !risk.trim() || selected.length < 1 || selected.length > 4 || busy) return;
     setBusy(true); setError('');
     try {
-      const current = normalizeRelease(await readPatchLock(readClient, 'get_release', [id]), id);
+      const [currentRaw, globalCountRaw] = await Promise.all([
+        readPatchLock(readClient, 'get_release', [id]),
+        readPatchLock(readClient, 'get_review_count'),
+      ]);
+      const current = normalizeRelease(currentRaw, id);
+      if (!current) throw new Error(`Release ${id} was not found during confirmation snapshot.`);
       const expectedSequence = current.review_count + 1;
+      const expectedGlobalCount = numberValue(globalCountRaw) + 1;
+      expectedSequenceRef.current = expectedSequence;
+      expectedGlobalReviewCountRef.current = expectedGlobalCount;
       const result = await write('review_release', [id, title.trim(), risk.trim(), selected], {
         onAwaiting: () => setTx({ phase: 'awaiting' }),
         onSubmitted: (hash) => setTx({ phase: 'submitted', hash }),
         onEvaluating: (hash) => setTx({ phase: 'evaluating', hash }),
       });
-      if (!consensusReceiptAccepted(result)) { setTx({ phase: 'unresolved', hash: result.hash }); checkRef.current = () => confirmReview(expectedSequence, result.hash); return; }
-      setTx({ phase: 'accepted', hash: result.hash }); checkRef.current = () => confirmReview(expectedSequence, result.hash); await confirmReview(expectedSequence, result.hash);
+      if (!consensusReceiptAccepted(result)) { setTx({ phase: 'unresolved', hash: result.hash }); checkRef.current = () => confirmReview(expectedSequence, expectedGlobalCount, result.hash); return; }
+      setTx({ phase: 'accepted', hash: result.hash }); checkRef.current = () => confirmReview(expectedSequence, expectedGlobalCount, result.hash); await confirmReview(expectedSequence, expectedGlobalCount, result.hash);
     } catch (cause) {
-      if (cause?.transactionHash) { setTx({ phase: 'unresolved', hash: cause.transactionHash }); checkRef.current = () => confirmReview((release.review_count || 0) + 1, cause.transactionHash); }
+      if (cause?.transactionHash) { setTx({ phase: 'unresolved', hash: cause.transactionHash }); checkRef.current = () => confirmReview(expectedSequenceRef.current, expectedGlobalReviewCountRef.current, cause.transactionHash); }
       else setError(transactionErrorMessage(cause));
     } finally { setBusy(false); }
   };
@@ -602,44 +646,79 @@ function ReviewRecordPage({ id, readClient, navigate }) {
   </section>;
 }
 
+function reviewQueueState(record) {
+  const release = record.release;
+  if (release.blocked) return { tone: 'blocked', label: 'UNDER QUARANTINE', detail: 'Permanent block' };
+  if (record.allowed) return { tone: 'clear', label: 'CLEARED', detail: 'CLEAR + BOUND' };
+  if (release.review_count === 0 || release.latest_verdict === 'UNDETERMINED') return { tone: 'hold', label: 'NEEDS REVIEW', detail: 'No current authorization' };
+  if (release.latest_verdict === 'CAUTION') return { tone: 'caution', label: 'CAUTION / HOLD', detail: 'Meaningful concern' };
+  return { tone: 'hold', label: 'NEEDS REVIEW', detail: 'Not authorized' };
+}
+
 function ReviewQueuePage({ readClient, navigate }) {
-  const [reviews, setReviews] = useState([]);
+  const [records, setRecords] = useState([]);
   const [state, setState] = useState({ loading: true, error: '' });
   const load = useCallback(async () => {
     setState({ loading: true, error: '' });
-    try { setReviews((await fetchAllReviews(readClient)).sort((a, b) => b.review_id - a.review_id)); setState({ loading: false, error: '' }); }
+    try { setRecords((await fetchAllReleases(readClient)).sort((a, b) => b.id - a.id)); setState({ loading: false, error: '' }); }
     catch (cause) { setState({ loading: false, error: errorMessage(cause) }); }
   }, [readClient]);
   useEffect(() => { load(); }, [load]);
-  return <section className="page-section queue-page"><PageHeading eyebrow="03 / APPEND-ONLY RECORDS" title="REVIEW QUEUE"><button type="button" className="text-button" onClick={load}>REFRESH QUEUE</button></PageHeading><p className="queue-intro">Permissionless reviews are visible here as historical adjudication records. A favorable filing cannot erase a confirmed permanent block.</p>{state.loading ? <LoadingState label="Reading review history..." /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : reviews.length === 0 ? <div className="empty-state"><strong>NO REVIEWS RECORDED</strong><span>Review history will appear here after the first adjudication.</span></div> : <div className="queue-list">{reviews.map((review) => <a key={review.review_id} href={'#review-record/' + review.review_id} className="queue-item"><div className="queue-id"><span>REVIEW</span><strong>{formatReleaseId(review.review_id)}</strong></div><div><strong>{review.title}</strong><span>RELEASE {formatReleaseId(review.release_id)} / SEQUENCE {review.sequence_number}</span></div><div className="queue-state"><StatusPill label={review.verdict} tone={verdictTone(review.verdict)} /><StatusPill label={review.release_binding} tone={bindingTone(review.release_binding)} /></div><div className="registry-arrow" aria-hidden="true">&gt;</div></a>)}</div>}</section>;
+  return <section className="page-section queue-page">
+    <PageHeading eyebrow="03 / REVIEW ATTENTION" title="REVIEW QUEUE"><button type="button" className="text-button" onClick={load}>REFRESH QUEUE</button></PageHeading>
+    <p className="queue-intro">Every release remains visible here. This queue highlights records with no review, unresolved evidence, meaningful caution, or a permanent quarantine; historical review records remain available from each dossier.</p>
+    {state.loading ? <LoadingState label="READING BRADBURY STATE / REVIEW QUEUE" variant="queue" />
+      : state.error ? <ErrorState message={state.error} onRetry={load} />
+      : records.length === 0 ? <div className="empty-state"><strong>NO RELEASES REGISTERED</strong><span>Review attention will appear here after the first release is registered.</span></div>
+      : <div className="queue-list">
+        {records.map((record) => {
+          const release = record.release;
+          const queue = reviewQueueState(record);
+          return <a key={record.id} href={'#release/' + release.release_id} className="queue-item" aria-label={'Open release ' + release.release_id + ' dossier'}>
+            <div className="queue-id"><span>RELEASE ID</span><strong>{formatReleaseId(release.release_id)}</strong></div>
+            <div className="queue-main"><strong>{release.project_name}</strong><span>{release.version} / {release.review_count} REVIEW{release.review_count === 1 ? '' : 'S'}</span></div>
+            <div className="queue-state"><span className="queue-column-label">STATE</span><StatusPill label={queue.label} tone={queue.tone} /></div>
+            <div className="queue-verdict"><span>VERDICT / BINDING</span><strong>{release.latest_verdict} / {release.latest_release_binding}</strong></div>
+            <div className="registry-arrow" aria-hidden="true">&gt;</div>
+          </a>;
+        })}
+      </div>}
+  </section>;
 }
 
 function DeploymentPage({ readClient }) {
   const [records, setRecords] = useState([]);
   const [selected, setSelected] = useState('');
   const [allowed, setAllowed] = useState(false);
+  const [gateError, setGateError] = useState('');
   const [state, setState] = useState({ loading: true, error: '' });
   const load = useCallback(async () => {
     setState({ loading: true, error: '' });
+    setAllowed(false);
+    setGateError('');
     try { const result = await fetchAllReleases(readClient); setRecords(result); setSelected((current) => current || String(result[0]?.id || '')); setState({ loading: false, error: '' }); }
     catch (cause) { setState({ loading: false, error: errorMessage(cause) }); }
   }, [readClient]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (!selected) { setAllowed(false); return undefined; }
+    if (!selected) { setAllowed(false); setGateError(''); return undefined; }
     let active = true;
-    readPatchLock(readClient, 'can_release', [numberValue(selected)]).then((result) => { if (active) setAllowed(Boolean(result)); }).catch(() => { if (active) setAllowed(false); });
+    setAllowed(false);
+    setGateError('');
+    readPatchLock(readClient, 'can_release', [numberValue(selected)]).then((result) => { if (active) setAllowed(Boolean(result)); }).catch((cause) => { if (active) { setAllowed(false); setGateError(errorMessage(cause)); } });
     return () => { active = false; };
   }, [readClient, selected]);
   const record = records.find((item) => String(item.id) === String(selected));
-  return <section className="page-section gate-page"><PageHeading eyebrow="04 / EXTERNAL CONSUMER" title="DEPLOYMENT AUTHORIZATION"><button type="button" className="text-button" onClick={load}>REFRESH AUTHORIZATION</button></PageHeading><div className="gate-flow"><div><span>01</span><strong>CI / CD</strong></div><b>&gt;</b><div><span>02</span><strong>PatchLockReleaseGate</strong></div><b>&gt;</b><div><span>03</span><strong>can_release()</strong></div><b>&gt;</b><div><span>04</span><strong>DEPLOY / BLOCK</strong></div></div>{state.loading ? <LoadingState label="Reading deployment authorization..." /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : records.length === 0 ? <div className="empty-state"><strong>NO RELEASE TO AUTHORIZE</strong><span>Register a release before reading the gate.</span></div> : <div className="gate-console"><Field label="SELECT REGISTERED RELEASE"><select value={selected} onChange={(event) => setSelected(event.target.value)}>{records.map((item) => <option key={item.id} value={item.id}>RELEASE {formatReleaseId(item.id)} / {item.release.project_name} {item.release.version}</option>)}</select></Field><div className={'gate-result ' + (allowed ? 'is-authorized' : 'is-blocked')} role="status" aria-live="polite"><span className="eyebrow">AUTHORITATIVE READ / NO DEPLOYMENT EXECUTED</span><strong>{allowed ? 'AUTHORIZED FOR DEPLOYMENT' : 'DEPLOYMENT BLOCKED'}</strong><code>can_release({selected}) = {allowed ? 'TRUE' : 'FALSE'}</code></div>{record && <div className="gate-record"><div><span>PROJECT / VERSION</span><strong>{record.release.project_name} / {record.release.version}</strong></div><div><span>LATEST VERDICT</span><strong>{record.release.latest_verdict} / {record.release.latest_release_binding}</strong></div><div><span>ACTIVE</span><strong>{record.release.active ? 'YES' : 'NO'}</strong></div><div><span>BLOCKED</span><strong>{record.release.blocked ? 'PERMANENT' : 'NO'}</strong></div></div>}<div className="adapter-note"><strong>REFERENCE ENFORCEMENT</strong><p><code>PatchLockReleaseGate</code> rereads <code>can_release(release_id)</code> before every protected deployment, fails closed on read errors or false authorization, and wraps downstream deployment failures separately.</p></div></div>}</section>;
+  const deniedLabel = record?.release.blocked ? 'PERMANENT QUARANTINE' : 'RELEASE NOT CLEARED';
+  return <section className="page-section gate-page"><PageHeading eyebrow="04 / EXTERNAL CONSUMER" title="DEPLOYMENT AUTHORIZATION"><button type="button" className="text-button" onClick={load}>REFRESH AUTHORIZATION</button></PageHeading><p className="gate-intro">This is a read-only authorization terminal. PatchLock does not perform deployment from this browser.</p><div className="gate-flow"><div><span>01</span><strong>CI / CD</strong></div><b>&gt;</b><div><span>02</span><strong>PatchLockReleaseGate</strong></div><b>&gt;</b><div><span>03</span><strong>can_release()</strong></div><b>&gt;</b><div><span>04</span><strong>DEPLOY / BLOCK</strong></div></div>{state.loading ? <LoadingState label="READING BRADBURY STATE / AUTHORIZATION" variant="gate" /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : records.length === 0 ? <div className="empty-state"><strong>NO RELEASE TO AUTHORIZE</strong><span>Register a release before reading the gate.</span></div> : <div className="gate-console"><Field label="SELECT REGISTERED RELEASE"><select value={selected} onChange={(event) => setSelected(event.target.value)}>{records.map((item) => <option key={item.id} value={item.id}>RELEASE {formatReleaseId(item.id)} / {item.release.project_name} {item.release.version}</option>)}</select></Field><div className={'gate-result ' + (allowed ? 'is-authorized' : 'is-blocked')} role={gateError ? 'alert' : 'status'} aria-live="polite"><span className="eyebrow">{gateError ? 'AUTHORIZATION CHECK FAILED / FAIL CLOSED' : 'AUTHORITATIVE READ / NO DEPLOYMENT EXECUTED'}</span><strong>{allowed ? 'DEPLOYMENT AUTHORIZED' : 'DEPLOYMENT DENIED'}</strong><b>{allowed ? 'EXACT RELEASE IS ELIGIBLE' : deniedLabel}</b><code>can_release({selected}) = {allowed ? 'TRUE' : 'FALSE'}</code>{gateError && <p>{gateError}</p>}</div>{record && <div className="gate-record"><div><span>PROJECT / VERSION</span><strong>{record.release.project_name} / {record.release.version}</strong></div><div><span>LATEST VERDICT</span><strong>{record.release.latest_verdict} / {record.release.latest_release_binding}</strong></div><div><span>ACTIVE</span><strong>{record.release.active ? 'YES' : 'NO'}</strong></div><div><span>BLOCKED</span><strong>{record.release.blocked ? 'PERMANENT' : 'NO'}</strong></div></div>}<div className="adapter-note"><strong>REFERENCE ENFORCEMENT</strong><p><code>PatchLockReleaseGate</code> rereads <code>can_release(release_id)</code> before every protected deployment, fails closed on read errors or false authorization, and wraps downstream deployment failures separately. External systems must enforce this boundary.</p></div></div>}</section>;
 }
 
 function PolicyPage() {
   const sections = [
     ['EXACT RELEASE IDENTITY', 'A release is project, version, commit hash, artifact hash, manifest hash, and SBOM hash. These fields and the registering signer have no mutation path.'],
-    ['POLICY LOCKING', 'The release owner may revise policy before the first review. Each successful update increments a system-controlled version. The first review attempt freezes the snapshot.'],
+    ['POLICY LOCKING', 'The release owner may revise policy before the first successful review. Each successful update increments a system-controlled version. The first successful review freezes the snapshot.'],
     ['SOURCE SET LOCKING', 'The owner configures 1-14 exact HTTP(S) source strings. Reviews may select only exact frozen members, with no fuzzy matching or alternate spelling.'],
+    ['PERMISSIONLESS REVIEW', 'Anyone may submit a review claim, but no reviewer can inject an unregistered source or write a verdict. Only consensus-accepted CLEAR + BOUND on an active, unblocked release authorizes the downstream gate.'],
     ['RELEASE BINDING', 'Evidence must be reasonably tied to the registered build. CLEAR + PARTIAL or CLEAR + UNBOUND is not authorization. Weakly bound BLOCKED results are normalized conservatively.'],
     ['REPLAY PROTECTION', 'The contract fingerprints release identity, policy/source versions, exact URLs, statuses, and bounded bodies with deterministic SHA-256. A commitment cannot be reviewed twice.'],
     ['STICKY BLOCKING', 'A sufficiently bound BLOCKED review sets a permanent bit. Later favorable reviews cannot clear it. Rehabilitation requires a new release record and a new artifact identity.'],
@@ -721,16 +800,16 @@ function App() {
     if (configurationError()) return <ConfigurationState />;
     if (routeName === 'home') return <Home navigate={navigate} />;
     if (routeName === 'releases') return <ReleasesPage readClient={readClient} navigate={navigate} />;
-    if (routeName === 'register') return <RegisterPage readClient={readClient} account={account} write={write} navigate={navigate} />;
+    if (routeName === 'register' || routeName === 'register-release') return <RegisterPage readClient={readClient} account={account} write={write} navigate={navigate} />;
     if (routeName === 'release') return <ReleasePage id={routeId} readClient={readClient} account={account} write={write} navigate={navigate} />;
     if (routeName === 'review') return <ReviewPage id={routeId} readClient={readClient} account={account} write={write} navigate={navigate} />;
     if (routeName === 'review-record') return <ReviewRecordPage id={routeId} readClient={readClient} navigate={navigate} />;
     if (routeName === 'review-queue') return <ReviewQueuePage readClient={readClient} navigate={navigate} />;
     if (routeName === 'deployment') return <DeploymentPage readClient={readClient} />;
-    if (routeName === 'policy') return <PolicyPage />;
+    if (routeName === 'policy' || routeName === 'policy-standard') return <PolicyPage />;
     return <Home navigate={navigate} />;
   };
-  return <div className="app-shell"><Header routeName={routeName} account={account} walletBusy={walletBusy} walletError={walletError} onConnect={connect} onDisconnect={disconnect} /><NetworkNotice account={account} chainId={chainId} /><main>{renderPage()}</main><footer className="site-footer"><span>PATCHLOCK / RELEASE QUARANTINE AUTHORITY</span><span>PUBLIC READS / NO DEPLOYMENT PROOF CLAIMED</span></footer></div>;
+  return <div className="app-shell"><Header routeName={routeName} account={account} walletBusy={walletBusy} walletError={walletError} onConnect={connect} onDisconnect={disconnect} /><NetworkNotice account={account} chainId={chainId} /><main>{renderPage()}</main><footer className="site-footer"><span>PATCHLOCK / RELEASE QUARANTINE AUTHORITY</span><span>BRADBURY / LIVE CONTRACT CONFIGURED</span></footer></div>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
