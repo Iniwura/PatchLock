@@ -23,7 +23,7 @@ The contract at contracts/patchlock.py is the source of truth. It stores:
 
 execution/patchlock_release_gate.py is the repository-level reference consumer. It rereads can_release(release_id) for every deployment attempt and calls the downstream target only after authorization succeeds.
 
-The deploy/ directory contains the Bradbury deployment note and a non-executed deployment helper. The currently deployed address is a legacy pre-steward-hardening contract; the hardened contract in this branch has not been deployed.
+The deploy/ directory contains the Bradbury deployment note and a non-executed deployment helper. The hardened contract is deployed at the canonical address recorded below; the legacy address remains documented only as LEGACY / PRE-STEWARD-HARDENING.
 
 ## Release identity
 
@@ -190,56 +190,56 @@ genvm-lint typecheck contracts/patchlock.py
 
 ## Frontend
 
-The local React/Vite frontend lives in app/. It is an operational read surface for the pre-hardening ten-method ABI and is intentionally unchanged in this branch:
+The local React/Vite frontend lives in app/ and targets the hardened 11-method Bradbury API at the canonical deployment address:
 
-- public release and review reads continue without a wallet;
-- registration and review forms use the exact contract argument order;
-- review evidence is selected only from the release's frozen, exact source strings;
-- registration and review writes resolve their record IDs from authoritative post-write reads;
-- policy, source-set, active-state, and review writes require readable state confirmation before completion;
-- the deployment page reads can_release() only and never pretends to deploy;
+- public release, review, and authorization reads continue without a wallet;
+- registration creates an unsealed release; the owner can edit policy and sources, then irreversibly seal the release;
+- sealed releases show POLICY + SOURCES LOCKED and expose permissionless full-source review;
+- review forms display every frozen source read-only and submit the complete release.evidence_sources set automatically;
+- review title and claimed risk are reviewer metadata; adjudication authority remains the sealed release context plus fetched evidence;
+- registration, seal, review, policy, source-set, and active-state writes require authoritative post-write confirmation;
+- the deployment page calls can_release() read-only, distinguishes confirmed FALSE from READ FAILED / AUTHORIZATION UNKNOWN, and never pretends to deploy;
 - external protected execution must use PatchLockReleaseGate or an equivalent fresh authorization boundary.
 
-The wallet integration uses the installed genlayer-js 1.2.0 Bradbury definition and an injected EIP-1193 provider. It does not use MetaMask Snaps or client.connect(). The unchanged frontend still targets the legacy ABI/address until a hardened contract is deployed; it contains no fabricated release data. A later frontend pass must add seal_release/sealed lifecycle handling, require the complete frozen source set for reviews, and rewire the address and ABI to the hardened deployment.
+The wallet integration uses the installed genlayer-js 1.2.0 Bradbury definition and an injected EIP-1193 provider. It preserves direct eth_requestAccounts, eth_chainId, and wallet_switchEthereumChain handling, does not use MetaMask Snaps or client.connect(), and retains the walletless read path. No release or review data is fabricated when RPC state cannot be read.
 
-The UI preserves the contract's security model: exact release identity is readable, policy and source versions are visible per review, non-BOUND CLEAR results are shown as non-authorizing, sticky BLOCKED records receive a permanent quarantine seal, and a corrected artifact is presented as a new release rather than an in-place rehabilitation.
+The UI preserves the contract's security model: exact release identity is readable, sealed/policy/source versions and review_count remain visible, non-BOUND CLEAR results are shown as non-authorizing, sticky BLOCKED records receive a permanent quarantine seal, and a corrected artifact is presented as a new release rather than an in-place rehabilitation.
 
 ## Deployment
 
-**BRADBURY / LEGACY / PRE-STEWARD-HARDENING.**
+**BRADBURY / HARDENED / CANONICAL.**
 
 - Network: Bradbury
+- Hardened canonical contract: `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`
+- Deployment transaction: `0x234cc067d8f5d53a643d636658510f24b742a8e9e845639dd7e718c2ccbc50fe`
+- Source commit: `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`
+- Hardened deployed source was retrieved and verified.
+- No deployment is performed by this repository during validation. The prepared helper remains at `deploy/deployScript.ts`.
+
+**LEGACY / PRE-STEWARD-HARDENING.**
+
 - Legacy contract: `0x92C621Ae9781c9b6695dfd5B6aeAe78b09cF7E71`
 - Legacy deployment transaction: `0xb1d1883290f1e89bc31cd5f43df4861f0cbc12cabe3f23facfb75dedef3e0023`
 
+The legacy address, transaction, and historical Releases 1/2/3 are not records from the hardened deployment.
 
-The legacy address and transaction above are retained only as historical live proof. The steward-hardened contract in this branch is NOT DEPLOYED and has no canonical address or transaction hash yet. No deployment is performed by this repository. The prepared helper remains at `deploy/deployScript.ts`; it reads the contract, submits `args: []`, waits for ACCEPTED, requires AGREE and a valid address, and prints the transaction hash and address.
+## LIVE BRADBURY EVIDENCE
 
-## LIVE BRADBURY PROOF
+The hardened Bradbury smoke evidence is intentionally limited:
 
-The following observations are historical live proof for the legacy pre-steward-hardening Bradbury deployment only; they do not prove the hardened contract is deployed.
+- Release 1 registration succeeded on the hardened contract.
+- Release 1 seal succeeded on the hardened contract.
+- Two review attempts ended `LEADER_TIMEOUT` with no validator vote.
+- Authoritative state showed `review_count = 0` after the first timeout and remained `review_count = 0` after the later retry.
+- The hardened deployment has not been live-proven to produce `CLEAR / BOUND` or `can_release = true`.
+- The Bradbury review smoke remains pending because network/consensus availability did not provide an accepted review.
+- The local regression suite proves the positive authorization path and the sticky-block path.
 
-### CLEAR path
+The live lifecycle is:
 
-`REGISTERED -> CLEAR + BOUND -> can_release(1) = true`
+`REGISTER -> EDIT -> SEAL -> FULL-SOURCE REVIEW -> VERDICT -> can_release()`
 
-- Release 1 registration transaction: `0x4bee5a93cb8f16b0c8006c5c48401a873144a6916dc3bb27dfcef1c5297a4d7a`.
-- Accepted review transaction: `0xa5ea8543301eb21ae4c2ba941f687637aa681f05d8aa6a51f68b277e84e615de`.
-- Final observed state: release 1, CLEAR, BOUND, blocked false, `can_release(1) = true`.
-
-### Permanent quarantine path
-
-`REGISTERED -> BLOCKED + BOUND -> blocked = true -> can_release(2) = false`
-
-- Accepted blocking review transactions: `0xb3191a09f7dec153e646afc22991ff4fa20a4641165594ec2e16f6c12e75b71e` and `0xedd3d08cb679266b18709edd4f94b802ded62fa0bd121afef36eb32584ff764d`.
-- Final observed state: release 2, BLOCKED, BOUND, blocked true, `can_release(2) = false`.
-- Global accepted review count after this proof: 3.
-
-### Later favorable filing
-
-The later favorable filing transaction was `0x8d64ddb4a0179a941ce38c0bf7aeadb4801d803124fc8f872eef923ab2d4f56f`. Its final observed status was **Undetermined** with `statusCode: 6`. It was not accepted, did not produce CLEAR, and did not mutate authoritative accepted state. Release 2 remained BLOCKED/BOUND with blocked true and `can_release(2) = false`.
-
-This live observation does not claim that the network accepted a favorable review after a block, and it does not claim that live Bradbury proved CLEAR-after-BLOCKED persistence. The local contract regression suite separately proves that later accepted favorable verdicts cannot clear the sticky blocked flag.
+No Review 1 is fabricated for the hardened deployment because authoritative `get_review_count()` is 0.
 
 ### Limitations
 

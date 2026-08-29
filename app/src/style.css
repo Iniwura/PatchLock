@@ -93,6 +93,7 @@ code, .eyebrow, .field label, .field-hint, .section-rule, .small-print, .hash-la
 .button.secondary { border-color: var(--line-light); background: transparent; color: var(--paper); }
 .button.secondary:hover { border-color: var(--paper); background: var(--paper); color: var(--graphite); }
 .button.small-button { min-height: 37px; padding: 0 12px; font-size: 9px; }
+.button.is-disabled { opacity: .42; cursor: not-allowed; pointer-events: none; transform: none; }
 .menu-toggle { display: none; width: 42px; height: 42px; border: 1px solid var(--line-light); background: transparent; color: var(--paper); cursor: pointer; font-size: 20px; }
 .wallet-error { position: absolute; right: 64px; top: 70px; max-width: 430px; padding: 10px 13px; border: 1px solid var(--danger); background: var(--graphite-deep); color: #ffb49e; font: 10px/1.5 var(--mono); }
 .network-notice { display: flex; gap: 15px; align-items: center; padding: 10px clamp(20px, 4vw, 64px); border-bottom: 1px solid #85502d; background: #2b211b; color: #f3bc8d; font: 11px var(--mono); }
@@ -303,6 +304,8 @@ main { max-width: 1600px; margin: 0 auto; }
 .active-control > span { color: var(--steel); font: 9px var(--mono); }
 .active-control strong { margin-right: auto; color: var(--paper); font: 11px var(--mono); }
 .warning-copy { color: var(--orange) !important; }
+.seal-callout { display: flex; flex-direction: column; gap: 8px; margin: 24px 0 16px; padding: 14px 16px; border-left: 2px solid var(--orange); background: #211b19; color: var(--paper-muted); font: 10px/1.6 var(--mono); }
+.seal-callout strong { color: var(--orange); font-size: 9px; letter-spacing: .08em; }
 .review-context, .review-record-meta { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line-light); border-left: 1px solid var(--line-light); }
 .review-context > div, .review-record-meta > div { display: flex; flex-direction: column; gap: 10px; min-height: 91px; padding: 17px; border-right: 1px solid var(--line-light); border-bottom: 1px solid var(--line-light); }
 .review-context span, .review-record-meta span { color: var(--steel); font-size: 8px; }
@@ -357,6 +360,7 @@ main { max-width: 1600px; margin: 0 auto; }
 .gate-result.is-authorized { color: var(--green); }
 .gate-result.is-blocked { color: var(--orange); }
 .gate-result strong { color: var(--paper); font: 800 clamp(29px, 4vw, 62px)/.9 var(--display); letter-spacing: -.05em; }
+.gate-result.is-unknown { color: var(--caution); }
 .gate-result code { color: currentColor; font: 12px var(--mono); }
 .gate-result b { color: var(--paper); font: 700 12px var(--mono); letter-spacing: .08em; }
 .gate-result p { margin: 0; color: #f2c1b2; font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }

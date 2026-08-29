@@ -77,6 +77,11 @@ function arrayEqual(left, right) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
+function authorizationValue(value) {
+  if (value === true || value === false) return value;
+  throw new Error('PatchLock can_release() returned an invalid authorization value.');
+}
+
 function releaseState(release, allowed) {
   if (release.blocked) {
     return { tone: 'blocked', label: 'BLOCKED / PERMANENTLY QUARANTINED', detail: 'Permanent block' };
@@ -84,11 +89,20 @@ function releaseState(release, allowed) {
   if (!release.active) {
     return { tone: 'inactive', label: 'INACTIVE / HOLD', detail: 'Release inactive' };
   }
+  if (!release.sealed) {
+    return { tone: 'hold', label: 'UNSEALED / EDITABLE', detail: 'Owner may still change policy and evidence sources' };
+  }
+  if (allowed === null || allowed === undefined) {
+    return { tone: 'hold', label: 'READ FAILED / AUTHORIZATION UNKNOWN', detail: 'The can_release() read could not be confirmed' };
+  }
+  if (release.review_count === 0) {
+    return { tone: 'hold', label: 'SEALED / AWAITING REVIEW', detail: 'Policy and sources are locked; no accepted review is recorded' };
+  }
   if (allowed && release.latest_verdict === 'CLEAR' && release.latest_release_binding === 'BOUND') {
     return { tone: 'clear', label: 'CLEAR / AUTHORIZED', detail: 'Eligible for release' };
   }
   if (release.latest_verdict === 'CLEAR') {
-    return { tone: 'caution', label: 'CLEAR / ' + release.latest_release_binding + ' / HOLD', detail: 'Release binding is not BOUND' };
+    return { tone: 'caution', label: 'CLEAR / HOLD', detail: 'Release binding is not BOUND' };
   }
   if (release.latest_verdict === 'CAUTION') {
     return { tone: 'caution', label: 'CAUTION / QUARANTINED', detail: 'Meaningful concern' };
@@ -153,7 +167,7 @@ function TransactionStatus({ state, onCheck }) {
     accepted: ['CONSENSUS ACCEPTED', 'The transaction is accepted; reading authoritative PatchLock state.'],
     confirming: ['CONFIRMING CONTRACT STATE', 'Waiting for the updated record to be readable.'],
     confirmed: ['RECORDED', state.detail || 'PatchLock state is authoritative.'],
-    pending: ['STATE CONFIRMATION PENDING', 'The transaction hash is retained. No second transaction was submitted.'],
+    pending: ['STATE CONFIRMATION PENDING', 'Authoritative state is not readable yet or the RPC read failed. The transaction hash is retained; retry the state check.'],
     unresolved: ['CONSENSUS UNRESOLVED', 'The receipt did not produce a confirmed state change. No second transaction was submitted.'],
   };
   const [title, detail] = copy[state.phase] || copy.submitted;
@@ -254,7 +268,7 @@ function Home({ navigate }) {
     <section className="architecture page-section">
       <div className="section-rule"><span>01 / AUTHORIZATION CHAIN</span><span>RELEASE CONTROL PATH</span></div>
       <div className="architecture-chain">
-        {['SIGNED RELEASE', 'LOCKED POLICY', 'SOURCE-BOUND EVIDENCE', 'GENLAYER REVIEW', 'RELEASE VERDICT', 'can_release()', 'DEPLOYMENT GATE'].map((item, index) => <React.Fragment key={item}><div className="chain-node"><span>{String(index + 1).padStart(2, '0')}</span><strong>{item}</strong></div>{index < 6 && <span className="chain-arrow" aria-hidden="true">&gt;</span>}</React.Fragment>)}
+        {['REGISTERED RELEASE', 'OWNER SEALS', 'FROZEN POLICY + SOURCES', 'FULL-SOURCE REVIEW', 'RELEASE VERDICT', 'can_release()', 'DEPLOYMENT GATE'].map((item, index) => <React.Fragment key={item}><div className="chain-node"><span>{String(index + 1).padStart(2, '0')}</span><strong>{item}</strong></div>{index < 6 && <span className="chain-arrow" aria-hidden="true">&gt;</span>}</React.Fragment>)}
       </div>
     </section>
     <section className="home-brief page-section">
@@ -269,7 +283,7 @@ async function fetchReleaseBundle(readClient, id) {
     readPatchLock(readClient, 'get_release', [id]),
     readPatchLock(readClient, 'can_release', [id]),
   ]);
-  return { release: normalizeRelease(raw, id), allowed: Boolean(allowed) };
+  return { release: normalizeRelease(raw, id), allowed: authorizationValue(allowed) };
 }
 
 async function fetchAllReviews(readClient) {
@@ -277,7 +291,7 @@ async function fetchAllReviews(readClient) {
   if (!count) return [];
   const reviews = await Promise.all(Array.from({ length: count }, (_, index) => {
     const id = index + 1;
-    return readPatchLock(readClient, 'get_review', [id]).then((raw) => normalizeReview(raw, id)).catch(() => null);
+    return readPatchLock(readClient, 'get_review', [id]).then((raw) => normalizeReview(raw, id));
   }));
   return reviews.filter(Boolean);
 }
@@ -287,7 +301,7 @@ async function fetchAllReleases(readClient) {
   if (!count) return [];
   const records = await Promise.all(Array.from({ length: count }, (_, index) => {
     const id = index + 1;
-    return fetchReleaseBundle(readClient, id).then((item) => ({ ...item, id })).catch(() => null);
+    return fetchReleaseBundle(readClient, id).then((item) => ({ ...item, id }));
   }));
   return records.filter((item) => item?.release);
 }
@@ -330,11 +344,11 @@ function ReleasesPage({ readClient, navigate }) {
 
 function SourceEditor({ sources, setSources, disabled = false }) {
   const update = (index, value) => setSources((items) => items.map((item, itemIndex) => itemIndex === index ? value : item));
-  const add = () => { if (sources.length < 14) setSources((items) => [...items, '']); };
+  const add = () => { if (sources.length < 4) setSources((items) => [...items, '']); };
   const remove = (index) => { if (sources.length > 1) setSources((items) => items.filter((_, itemIndex) => itemIndex !== index)); };
   return <div className="source-editor">
     {sources.map((source, index) => <div className="source-input" key={index}><span>{String(index + 1).padStart(2, '0')}</span><input aria-label={'Evidence source ' + (index + 1)} disabled={disabled} type="url" value={source} onChange={(event) => update(index, event.target.value)} placeholder="https://security.example/advisory" />{!disabled && <button type="button" className="icon-button" aria-label={'Remove evidence source ' + (index + 1)} onClick={() => remove(index)} disabled={sources.length <= 1}>X</button>}</div>)}
-    {!disabled && <button type="button" className="add-source" onClick={add} disabled={sources.length >= 14}>+ ADD SOURCE <span>{sources.length}/14</span></button>}
+    {!disabled && <button type="button" className="add-source" onClick={add} disabled={sources.length >= 4}>+ ADD SOURCE <span>{sources.length}/4</span></button>}
   </div>;
 }
 
@@ -348,7 +362,7 @@ function RegisterPage({ readClient, account, write, navigate }) {
   const expectedIdRef = useRef(null);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const validSources = sources.map((source) => source.trim());
-  const canSubmit = Boolean(account && Object.values(form).every((value) => value.trim()) && validSources.length >= 1 && validSources.length <= 14 && uniqueValues(validSources) && validSources.every(isHttpUrl));
+  const canSubmit = Boolean(account && Object.values(form).every((value) => value.trim()) && validSources.length >= 1 && validSources.length <= 4 && uniqueValues(validSources) && validSources.every(isHttpUrl));
   const confirmRegistration = useCallback(async (expectedId, hash) => {
     setTx({ phase: 'confirming', hash });
     const found = await pollAuthoritative(
@@ -357,7 +371,7 @@ function RegisterPage({ readClient, account, write, navigate }) {
         if (count < expectedId) return null;
         const raw = await readPatchLock(readClient, 'get_release', [expectedId]);
         const release = normalizeRelease(raw, expectedId);
-        return release && sameAddress(release.release_signer, account) ? release : null;
+        return release && sameAddress(release.release_signer, account) && release.sealed === false && release.review_started === false && release.review_count === 0 ? release : null;
       },
       Boolean,
       12,
@@ -416,13 +430,13 @@ function RegisterPage({ readClient, account, write, navigate }) {
           <Field label="MANIFEST HASH"><input required className="mono-input" value={form.manifest} onChange={(event) => update('manifest', event.target.value)} placeholder="release manifest digest" /></Field>
           <Field label="SBOM HASH"><input required className="mono-input" value={form.sbom} onChange={(event) => update('sbom', event.target.value)} placeholder="SBOM digest" /></Field>
         </div></div>
-        <div className="form-block"><div className="form-block-title"><span>RELEASE POLICY</span><small>VERSION 1 AT REGISTRATION</small></div><Field label="POLICY TEXT" hint="This policy locks after the first successful review."><textarea required rows="6" value={form.policy} onChange={(event) => update('policy', event.target.value)} placeholder="Block release if evidence establishes a known critical vulnerability exploitable in the shipped artifact." /></Field></div>
-        <div className="form-block"><div className="form-block-title"><span>EVIDENCE SOURCES</span><small>1-14 EXACT HTTP(S) URLS</small></div><p className="form-explanation">These registered source strings become the release's evidence source set. Once review begins, every review must use exact members of this frozen set.</p><SourceEditor sources={sources} setSources={setSources} /></div>
+        <div className="form-block"><div className="form-block-title"><span>RELEASE POLICY</span><small>VERSION 1 AT REGISTRATION</small></div><Field label="POLICY TEXT" hint="Editable until the release owner seals the release."><textarea required rows="6" value={form.policy} onChange={(event) => update('policy', event.target.value)} placeholder="Block release if evidence establishes a known critical vulnerability exploitable in the shipped artifact." /></Field></div>
+        <div className="form-block"><div className="form-block-title"><span>EVIDENCE SOURCES</span><small>1-4 EXACT HTTP(S) URLS</small></div><p className="form-explanation">These registered source strings become the release's evidence source set. The owner may edit them until sealing; every later review uses the complete frozen set.</p><SourceEditor sources={sources} setSources={setSources} /></div>
         <div className="attestation-box"><strong>ONCHAIN REGISTRATION ATTESTATION</strong><p>Your wallet will register these exact release identifiers onchain. The transaction signer becomes the release signer for this record.</p><p>PatchLock does not independently verify an external CI signature. It proves that the GenLayer transaction signer registered the submitted identifiers.</p></div>
         {error && <div className="error-state" role="alert"><strong>REGISTRATION NOT COMPLETE</strong><span>{error}</span></div>}
         <div className="form-submit"><button className="button" type="submit" disabled={!canSubmit || busy}>{busy ? 'RECORDING...' : account ? 'REGISTER EXACT RELEASE' : 'CONNECT WALLET TO REGISTER'}</button><span>Writes require GenLayer Bradbury.</span></div>
       </form>
-      <aside className="form-aside"><p className="eyebrow">REGISTRATION CONTRACT</p><ol className="numbered-list"><li><strong>Exact identity</strong><span>Project, version, commit, artifact, manifest, and SBOM are required.</span></li><li><strong>Signed by sender</strong><span>The transaction wallet is recorded as release_signer.</span></li><li><strong>Policy begins at v1</strong><span>Owner updates increment the system-controlled policy version.</span></li><li><strong>Sources freeze after success</strong><span>Alternate URL spelling and unregistered sources are rejected.</span></li></ol></aside>
+      <aside className="form-aside"><p className="eyebrow">REGISTRATION CONTRACT</p><ol className="numbered-list"><li><strong>Exact identity</strong><span>Project, version, commit, artifact, manifest, and SBOM are required.</span></li><li><strong>Signed by sender</strong><span>The transaction wallet is recorded as release_signer.</span></li><li><strong>Policy begins at v1</strong><span>Owner updates increment the system-controlled policy version.</span></li><li><strong>Sources freeze after seal</strong><span>After sealing, every review must use the complete frozen set.</span></li></ol></aside>
     </div>
     <TransactionStatus state={tx} onCheck={() => checkRef.current?.()} />
   </section>;
@@ -430,7 +444,7 @@ function RegisterPage({ readClient, account, write, navigate }) {
 
 function OwnerControls({ release, account, readClient, write, onRefresh }) {
   const owner = sameAddress(release.release_signer, account);
-  const editable = owner && !release.review_started;
+  const editable = owner && !release.sealed;
   const [policy, setPolicy] = useState(release.release_policy);
   const [sources, setSources] = useState(release.evidence_sources);
   const [busy, setBusy] = useState(false);
@@ -467,13 +481,16 @@ function OwnerControls({ release, account, readClient, write, onRefresh }) {
       setBusy(false);
     }
   };
-  if (!owner) return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="READ ONLY / NOT OWNER" tone="hold" /></div><p>Only the recorded release signer can change pre-review policy, source configuration, or active state.</p></div>;
-  if (release.review_started) return <div className="owner-panel locked-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="POLICY LOCKED / SOURCE SET LOCKED" tone="caution" /></div><p>The first successful review locked the policy and evidence source set. A changed rule or source configuration requires a new release registration.</p>{release.blocked && <p className="warning-copy">This artifact is permanently blocked. There is no unblock, reset, or pardon control.</p>}<div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div><TransactionStatus state={tx} onCheck={() => checkRef.current?.()} /></div>;
-  return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / PRE-REVIEW</span><StatusPill label="EDITABLE BEFORE FIRST REVIEW" tone="clear" /></div>
-    <div className="owner-control-grid"><div><Field label={`POLICY VERSION ${release.policy_version}`}><textarea rows="5" value={policy} onChange={(event) => setPolicy(event.target.value)} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || !policy.trim() || policy === release.release_policy} onClick={() => run('update_release_policy', [release.release_id, policy.trim()], (updated) => updated && updated.policy_version === release.policy_version + 1 && updated.release_policy === policy.trim())}>UPDATE POLICY / +1</button></div>
-      <div><Field label={`SOURCE SET VERSION ${release.source_set_version}`}><SourceEditor sources={sources} setSources={setSources} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || sources.length < 1 || sources.length > 14 || !uniqueValues(sources.map((source) => source.trim())) || sources.some((source) => !isHttpUrl(source.trim())) || arrayEqual(sources.map((source) => source.trim()), release.evidence_sources)} onClick={() => run('update_evidence_sources', [release.release_id, sources.map((source) => source.trim())], (updated) => updated && updated.source_set_version === release.source_set_version + 1 && arrayEqual(updated.evidence_sources, sources.map((source) => source.trim())))}>UPDATE SOURCES / +1</button></div></div>
+  if (!owner) return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="READ ONLY / NOT OWNER" tone="hold" /></div><p>Only the recorded release signer can change policy, evidence sources, sealing, or active state. This record is read-only for the connected account.</p></div>;
+  if (release.sealed) return <div className="owner-panel locked-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / SEALED</span><StatusPill label="SEALED / POLICY + SOURCES LOCKED" tone="caution" /></div><p>Owner sealing is irreversible. The policy, policy version, evidence sources, and source-set version are now frozen permanently. review_started records a persisted review; it is not the locking mechanism.</p>{release.blocked && <p className="warning-copy">This artifact is permanently blocked. There is no unblock, reset, pardon, or unseal control.</p>}<div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div><TransactionStatus state={tx} onCheck={() => checkRef.current?.()} /></div>;
+  return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / UNSEALED</span><StatusPill label="UNSEALED / EDITABLE" tone="clear" /></div>
+    <p>Policy and evidence sources remain editable for the release owner. SEAL RELEASE is irreversible and permanently freezes both snapshots; review is unavailable until sealing completes.</p>
+    <div className="owner-control-grid"><div><Field label={'POLICY VERSION ' + release.policy_version}><textarea rows="5" value={policy} onChange={(event) => setPolicy(event.target.value)} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || !policy.trim() || policy === release.release_policy} onClick={() => run('update_release_policy', [release.release_id, policy.trim()], (updated) => updated && updated.policy_version === release.policy_version + 1 && updated.release_policy === policy.trim())}>UPDATE POLICY / +1</button></div>
+      <div><Field label={'SOURCE SET VERSION ' + release.source_set_version}><SourceEditor sources={sources} setSources={setSources} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || sources.length < 1 || sources.length > 4 || !uniqueValues(sources.map((source) => source.trim())) || sources.some((source) => !isHttpUrl(source.trim())) || arrayEqual(sources.map((source) => source.trim()), release.evidence_sources)} onClick={() => run('update_evidence_sources', [release.release_id, sources.map((source) => source.trim())], (updated) => updated && updated.source_set_version === release.source_set_version + 1 && arrayEqual(updated.evidence_sources, sources.map((source) => source.trim())))}>UPDATE SOURCES / +1</button></div></div>
     <div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div>
-    {error && <div className="error-state" role="alert"><strong>OWNER WRITE FAILED</strong><span>{error}</span></div>}<TransactionStatus state={tx} />
+    <div className="seal-callout" role="note"><strong>SEALING IS IRREVERSIBLE</strong><span>After confirmation, policy and evidence sources are permanently locked. This does not authorize release; it only creates the sealed review context.</span></div>
+    <button type="button" className="button small-button" disabled={!editable || busy} onClick={() => run('seal_release', [release.release_id], (updated) => updated?.sealed === true)}>SEAL RELEASE</button>
+    {error && <div className="error-state" role="alert"><strong>OWNER WRITE FAILED</strong><span>{error}</span></div>}<TransactionStatus state={tx} onCheck={() => checkRef.current?.()} />
   </div>;
 }
 
@@ -494,8 +511,8 @@ function IdentityGrid({ release }) {
   </div>;
 }
 
-function ReviewTimeline({ reviews, navigate }) {
-  if (!reviews.length) return <div className="empty-inline">No review records yet. The release remains <strong>UNDETERMINED / HOLD</strong>.</div>;
+function ReviewTimeline({ reviews, navigate, release }) {
+  if (!reviews.length) return <div className="empty-inline">No review records yet. The release remains <strong>{release?.sealed ? 'SEALED / AWAITING REVIEW' : 'UNSEALED / EDITABLE'}</strong>.</div>;
   return <div className="review-timeline">{[...reviews].sort((a, b) => b.sequence_number - a.sequence_number).map((review) => <a className="timeline-item" key={review.review_id} href={`#review-record/${review.review_id}`}><div className="timeline-index"><span>SEQ</span><strong>{String(review.sequence_number).padStart(2, '0')}</strong></div><div className="timeline-main"><div><strong>{review.title}</strong><span>REVIEW {formatReleaseId(review.review_id)} / POLICY V{review.policy_version} / SOURCES V{review.source_set_version}</span></div><div className="timeline-verdict"><StatusPill label={review.verdict} tone={verdictTone(review.verdict)} /><StatusPill label={review.release_binding} tone={bindingTone(review.release_binding)} /></div></div></a>)}</div>;
 }
 
@@ -514,17 +531,17 @@ function ReleasePage({ id, readClient, account, write, navigate }) {
   }, [id, readClient]);
   useEffect(() => { refresh(); }, [refresh]);
   if (state.loading) return <section className="page-section"><LoadingState label="Opening release dossier..." /></section>;
-  if (state.error || !data.release) return <section className="page-section"><ErrorState message={state.error || `Release ${id} was not found.`} onRetry={refresh} /></section>;
+  if (state.error || !data.release) return <section className="page-section"><ErrorState message={state.error || ('Release ' + id + ' was not found.')} onRetry={refresh} /></section>;
   const release = data.release;
   const status = releaseState(release, data.allowed);
   return <section className="page-section dossier-page">
-    <div className="dossier-header"><div><p className="eyebrow">RELEASE {formatReleaseId(release.release_id)} / SOFTWARE RELEASE RECORD</p><h1>{release.project_name}<span>{release.version}</span></h1></div><div className="dossier-actions"><ButtonLink href={`review/${id}`} className={release.blocked ? 'secondary' : ''}>REVIEW RELEASE</ButtonLink><ButtonLink href="releases" className="text-link">BACK TO REGISTRY</ButtonLink></div></div>
+    <div className="dossier-header"><div><p className="eyebrow">RELEASE {formatReleaseId(release.release_id)} / SOFTWARE RELEASE RECORD</p><h1>{release.project_name}<span>{release.version}</span></h1></div><div className="dossier-actions">{release.sealed ? <ButtonLink href={'review/' + id} className={release.blocked ? 'secondary' : ''}>REVIEW RELEASE</ButtonLink> : <span className="button secondary is-disabled" aria-disabled="true" title="The owner must seal this release before review.">REVIEW LOCKED UNTIL SEAL</span>}<ButtonLink href="releases" className="text-link">BACK TO REGISTRY</ButtonLink></div></div>
     {release.blocked && <QuarantineSeal release={release} />}
-    <div className={`authorization-banner tone-${status.tone}`}><div><span className="eyebrow">CURRENT AUTHORIZATION</span><strong>{release.blocked ? 'RELEASE BLOCKED' : data.allowed ? 'CLEARED FOR RELEASE' : 'QUARANTINE HOLD'}</strong><StatusPill label={status.label} tone={status.tone} /></div><div className="authorization-call"><code>can_release({release.release_id})</code><strong>{data.allowed ? 'TRUE' : 'FALSE'}</strong></div></div>
+    <div className={'authorization-banner tone-' + status.tone}><div><span className="eyebrow">CURRENT AUTHORIZATION</span><strong>{release.blocked ? 'RELEASE BLOCKED' : !release.sealed ? 'RELEASE UNSEALED' : data.allowed ? 'CLEARED FOR RELEASE' : 'QUARANTINE HOLD'}</strong><StatusPill label={status.label} tone={status.tone} /></div><div className="authorization-call"><code>can_release({release.release_id})</code><strong>{data.allowed ? 'TRUE' : 'FALSE'}</strong></div></div>
     {release.blocked && <div className="permanent-warning" role="note"><strong>THIS ARTIFACT CANNOT BE REHABILITATED IN PLACE.</strong><span>A corrected build must be registered as a new release with a new artifact/build identity.</span><span>REVIEWS REMAIN APPEND-ONLY. PERMANENT QUARANTINE CANNOT BE CLEARED IN PLACE.</span></div>}
     <div className="dossier-block"><div className="section-rule"><span>01 / EXACT RELEASE IDENTITY</span><span>IMMUTABLE</span></div><IdentityGrid release={release} /></div>
-    <div className="dossier-two-column"><div className="dossier-block"><div className="section-rule"><span>02 / POLICY SNAPSHOT</span><span>LOCK {release.review_started ? 'ACTIVE' : 'PENDING'}</span></div><div className="policy-snapshot"><div className="snapshot-meta"><span>POLICY VERSION</span><strong>V{release.policy_version}</strong><span>REVIEW STARTED</span><strong>{release.review_started ? 'YES' : 'NO'}</strong></div><p>{release.release_policy}</p></div></div><div className="dossier-block"><div className="section-rule"><span>03 / EVIDENCE SOURCES</span><span>SET V{release.source_set_version}</span></div><p className="small-print">{release.review_started ? 'Frozen after the first successful review. Reviews may select only exact members.' : 'Owner-editable until the first successful review.'}</p><div className="source-list">{release.evidence_sources.map((source, index) => <div key={source}><span>{String(index + 1).padStart(2, '0')}</span><code>{source}</code></div>)}</div></div></div>
-    <div className="dossier-block history-block"><div className="section-rule"><span>04 / REVIEW HISTORY</span><span>{release.review_count} RECORD{release.review_count === 1 ? '' : 'S'}</span></div><ReviewTimeline reviews={data.reviews} navigate={navigate} /></div>
+    <div className="dossier-two-column"><div className="dossier-block"><div className="section-rule"><span>02 / POLICY SNAPSHOT</span><span>{release.sealed ? 'SEALED / POLICY + SOURCES LOCKED' : 'UNSEALED / EDITABLE'}</span></div><div className="policy-snapshot"><div className="snapshot-meta"><span>SEALED</span><strong>{release.sealed ? 'YES' : 'NO'}</strong><span>ACTIVE</span><strong>{release.active ? 'YES' : 'NO'}</strong><span>BLOCKED</span><strong>{release.blocked ? 'YES' : 'NO'}</strong><span>POLICY VERSION</span><strong>V{release.policy_version}</strong><span>SOURCE SET VERSION</span><strong>V{release.source_set_version}</strong><span>REVIEW STARTED</span><strong>{release.review_started ? 'YES' : 'NO'}</strong><span>REVIEW COUNT</span><strong>{release.review_count}</strong></div><p>{release.release_policy}</p></div></div><div className="dossier-block"><div className="section-rule"><span>03 / EVIDENCE SOURCES</span><span>{release.sealed ? 'SEALED / LOCKED' : 'EDITABLE / OWNER'}</span></div><p className="small-print">{release.sealed ? 'Frozen permanently by owner seal. Every review must use the complete frozen source set.' : 'Owner-editable until seal. Review is unavailable while this release is unsealed.'}</p><div className="source-list">{release.evidence_sources.map((source, index) => <div key={source}><span>{String(index + 1).padStart(2, '0')}</span><code>{source}</code></div>)}</div></div></div>
+    <div className="dossier-block history-block"><div className="section-rule"><span>04 / REVIEW HISTORY</span><span>{release.review_count} RECORD{release.review_count === 1 ? '' : 'S'}</span></div><ReviewTimeline reviews={data.reviews} navigate={navigate} release={release} /></div>
     <OwnerControls release={release} account={account} readClient={readClient} write={write} onRefresh={refresh} />
   </section>;
 }
@@ -535,7 +552,6 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
   const [error, setError] = useState('');
   const [title, setTitle] = useState('');
   const [risk, setRisk] = useState('');
-  const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
   const [tx, setTx] = useState(null);
   const checkRef = useRef(null);
@@ -547,18 +563,22 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
       const raw = await readPatchLock(readClient, 'get_release', [id]);
       const record = normalizeRelease(raw, id);
       if (!record) setError(`Release ${id} was not found.`);
-      else { setRelease(record); setSelected(record.evidence_sources.slice(0, 1)); }
+      else setRelease(record);
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setLoading(false); }
   }, [id, readClient]);
   useEffect(() => { load(); }, [load]);
-  const toggleSource = (source) => setSelected((items) => items.includes(source) ? items.filter((item) => item !== source) : items.length < 4 ? [...items, source] : items);
   const confirmReview = useCallback(async (expectedSequence, expectedGlobalCount, hash) => {
     setTx({ phase: 'confirming', hash });
     const found = await pollAuthoritative(
       async () => {
-        const count = numberValue(await readPatchLock(readClient, 'get_review_count'));
-        if (count < expectedGlobalCount) return null;
+        const [releaseRaw, countRaw] = await Promise.all([
+          readPatchLock(readClient, 'get_release', [id]),
+          readPatchLock(readClient, 'get_review_count'),
+        ]);
+        const current = normalizeRelease(releaseRaw, id);
+        const count = numberValue(countRaw);
+        if (!current || current.review_count < expectedSequence || count < expectedGlobalCount) return null;
         for (let reviewId = count; reviewId >= 1; reviewId -= 1) {
           const raw = await readPatchLock(readClient, 'get_review', [reviewId]);
           const review = normalizeReview(raw, reviewId);
@@ -578,7 +598,7 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
   }, [id, navigate, readClient]);
   const submit = async (event) => {
     event.preventDefault();
-    if (!release || !account || !title.trim() || !risk.trim() || selected.length < 1 || selected.length > 4 || busy) return;
+    if (!release || !release.sealed || !account || !title.trim() || !risk.trim() || busy) return;
     setBusy(true); setError('');
     try {
       const [currentRaw, globalCountRaw] = await Promise.all([
@@ -586,12 +606,13 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
         readPatchLock(readClient, 'get_review_count'),
       ]);
       const current = normalizeRelease(currentRaw, id);
-      if (!current) throw new Error(`Release ${id} was not found during confirmation snapshot.`);
+      if (!current) throw new Error('Release ' + id + ' was not found during confirmation snapshot.');
+      if (!current.sealed) throw new Error('Release must be sealed before review.');
       const expectedSequence = current.review_count + 1;
       const expectedGlobalCount = numberValue(globalCountRaw) + 1;
       expectedSequenceRef.current = expectedSequence;
       expectedGlobalReviewCountRef.current = expectedGlobalCount;
-      const result = await write('review_release', [id, title.trim(), risk.trim(), selected], {
+      const result = await write('review_release', [id, title.trim(), risk.trim(), [...current.evidence_sources]], {
         onAwaiting: () => setTx({ phase: 'awaiting' }),
         onSubmitted: (hash) => setTx({ phase: 'submitted', hash }),
         onEvaluating: (hash) => setTx({ phase: 'evaluating', hash }),
@@ -605,14 +626,15 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
   };
   if (loading) return <section className="page-section"><LoadingState label="Loading release review context..." /></section>;
   if (error || !release) return <section className="page-section"><ErrorState message={error || 'Release not found.'} onRetry={load} /></section>;
+  if (!release.sealed) return <section className="page-section form-page review-form-page"><PageHeading eyebrow={'REVIEW / RELEASE ' + formatReleaseId(id)} title="REVIEW UNAVAILABLE"><ButtonLink href={'release/' + id} className="text-link">BACK TO DOSSIER</ButtonLink></PageHeading><div className="permanent-warning" role="status"><strong>UNSEALED / EDITABLE — REVIEW LOCKED</strong><span>The release owner must seal the release before a permissionless review can be submitted. Sealing freezes policy and the complete evidence source set permanently.</span></div></section>;
   return <section className="page-section form-page review-form-page">
-    <PageHeading eyebrow={`REVIEW / RELEASE ${formatReleaseId(id)}`} title="ADJUDICATE RELEASE"><ButtonLink href={`release/${id}`} className="text-link">BACK TO DOSSIER</ButtonLink></PageHeading>
+    <PageHeading eyebrow={'REVIEW / RELEASE ' + formatReleaseId(id)} title="ADJUDICATE RELEASE"><ButtonLink href={'release/' + id} className="text-link">BACK TO DOSSIER</ButtonLink></PageHeading>
     {release.blocked && <div className="permanent-warning"><strong>PERMANENT BLOCK ALREADY EXISTS.</strong><span>Additional reviews may remain useful for history, but no later verdict can clear this artifact.</span></div>}
-    <div className="review-context"><div><span>PROJECT / VERSION</span><strong>{release.project_name} / {release.version}</strong></div><div><span>POLICY VERSION</span><strong>V{release.policy_version}</strong></div><div><span>SOURCE SET VERSION</span><strong>V{release.source_set_version}</strong></div><div><span>FROZEN SOURCES</span><strong>{release.evidence_sources.length} REGISTERED</strong></div></div>
-    <form className="review-form" onSubmit={submit}><Field label="REVIEW TITLE"><input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Dependency advisory review" /></Field><Field label="CLAIMED RISK" hint="A claim for validators to evaluate; not a verdict."><textarea required rows="5" value={risk} onChange={(event) => setRisk(event.target.value)} placeholder="Describe the observed release risk and why it may affect this exact build." /></Field>
-      <div className="evidence-selector"><div className="form-block-title"><span>SELECT FROZEN EVIDENCE</span><small>{selected.length}/4 SELECTED / EXACT MATCH ONLY</small></div><p className="form-explanation">The contract rejects any URL that is not an exact member of the release's frozen source set. There is no arbitrary URL field here.</p><div className="source-checks">{release.evidence_sources.map((source) => <label className={`source-check ${selected.includes(source) ? 'is-selected' : ''}`} key={source}><input type="checkbox" checked={selected.includes(source)} onChange={() => toggleSource(source)} disabled={!selected.includes(source) && selected.length >= 4} /><span className="check-box" aria-hidden="true" /><code>{source}</code></label>)}</div></div>
+    <div className="review-context"><div><span>PROJECT / VERSION</span><strong>{release.project_name} / {release.version}</strong></div><div><span>POLICY VERSION</span><strong>V{release.policy_version}</strong></div><div><span>SOURCE SET VERSION</span><strong>V{release.source_set_version}</strong></div><div><span>FROZEN SOURCES</span><strong>{release.evidence_sources.length} REGISTERED / READ ONLY</strong></div></div>
+    <form className="review-form" onSubmit={submit}><Field label="REVIEW TITLE" hint="Review metadata only; not adjudication authority."><input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Dependency advisory review" /></Field><Field label="CLAIMED RISK" hint="Review metadata only; adjudication uses sealed release context plus fetched evidence."><textarea required rows="5" value={risk} onChange={(event) => setRisk(event.target.value)} placeholder="Describe the observed release risk and why it may affect this exact build." /></Field>
+      <div className="evidence-selector"><div className="form-block-title"><span>COMPLETE FROZEN SOURCE SET REQUIRED</span><small>{release.evidence_sources.length} SOURCES / READ ONLY</small></div><p className="form-explanation">Every review sends release.evidence_sources automatically as evidence_urls. The frozen list is displayed read-only: no subset selection, arbitrary URLs, or meaningful reorder choice. The contract is authoritative for canonical sorting and validation.</p><div className="source-list">{release.evidence_sources.map((source, index) => <div key={source}><span>{String(index + 1).padStart(2, '0')}</span><code>{source}</code></div>)}</div><p className="small-print">Title and claimed risk remain reviewer-supplied metadata. Adjudication uses the sealed release context and fetched evidence, not reviewer wording as authority.</p></div>
       {error && <div className="error-state" role="alert"><strong>REVIEW NOT COMPLETE</strong><span>{error}</span></div>}
-      <div className="form-submit"><button className="button" type="submit" disabled={!account || !title.trim() || !risk.trim() || selected.length < 1 || selected.length > 4 || busy}>{busy ? 'SUBMITTING REVIEW...' : account ? 'SUBMIT REVIEW TO GENLAYER' : 'CONNECT WALLET TO REVIEW'}</button><span>Permissionless review. Authorization still requires CLEAR + BOUND.</span></div>
+      <div className="form-submit"><button className="button" type="submit" disabled={!account || !title.trim() || !risk.trim() || !release.evidence_sources.length || busy}>{busy ? 'SUBMITTING REVIEW...' : account ? 'SUBMIT REVIEW TO GENLAYER' : 'CONNECT WALLET TO REVIEW'}</button><span>Permissionless full-source review. Authorization still requires CLEAR + BOUND.</span></div>
     </form>
     <TransactionStatus state={tx} onCheck={() => checkRef.current?.()} />
   </section>;
@@ -649,8 +671,11 @@ function ReviewRecordPage({ id, readClient, navigate }) {
 function reviewQueueState(record) {
   const release = record.release;
   if (release.blocked) return { tone: 'blocked', label: 'UNDER QUARANTINE', detail: 'Permanent block' };
+  if (!release.active) return { tone: 'inactive', label: 'INACTIVE / HOLD', detail: 'Release inactive' };
+  if (!release.sealed) return { tone: 'hold', label: 'UNSEALED / EDITABLE', detail: 'Owner must seal before review' };
   if (record.allowed) return { tone: 'clear', label: 'CLEARED', detail: 'CLEAR + BOUND' };
-  if (release.review_count === 0 || release.latest_verdict === 'UNDETERMINED') return { tone: 'hold', label: 'NEEDS REVIEW', detail: 'No current authorization' };
+  if (release.review_count === 0) return { tone: 'hold', label: 'SEALED / AWAITING REVIEW', detail: 'Policy and sources are locked' };
+  if (release.latest_verdict === 'UNDETERMINED') return { tone: 'hold', label: 'UNDETERMINED / HOLD', detail: 'No current authorization' };
   if (release.latest_verdict === 'CAUTION') return { tone: 'caution', label: 'CAUTION / HOLD', detail: 'Meaningful concern' };
   return { tone: 'hold', label: 'NEEDS REVIEW', detail: 'Not authorized' };
 }
@@ -689,36 +714,49 @@ function ReviewQueuePage({ readClient, navigate }) {
 function DeploymentPage({ readClient }) {
   const [records, setRecords] = useState([]);
   const [selected, setSelected] = useState('');
-  const [allowed, setAllowed] = useState(false);
-  const [gateError, setGateError] = useState('');
+  const [authorization, setAuthorization] = useState({ known: false, value: false, error: '' });
   const [state, setState] = useState({ loading: true, error: '' });
+  const authorizationRequestRef = useRef(0);
   const load = useCallback(async () => {
+    authorizationRequestRef.current += 1;
     setState({ loading: true, error: '' });
-    setAllowed(false);
-    setGateError('');
-    try { const result = await fetchAllReleases(readClient); setRecords(result); setSelected((current) => current || String(result[0]?.id || '')); setState({ loading: false, error: '' }); }
-    catch (cause) { setState({ loading: false, error: errorMessage(cause) }); }
+    setAuthorization({ known: false, value: false, error: '' });
+    try {
+      const result = await fetchAllReleases(readClient);
+      setRecords(result);
+      setSelected((current) => result.some((item) => String(item.id) === String(current)) ? current : String(result[0]?.id || ''));
+      setState({ loading: false, error: '' });
+    } catch (cause) { setState({ loading: false, error: errorMessage(cause) }); }
   }, [readClient]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    if (!selected) { setAllowed(false); setGateError(''); return undefined; }
-    let active = true;
-    setAllowed(false);
-    setGateError('');
-    readPatchLock(readClient, 'can_release', [numberValue(selected)]).then((result) => { if (active) setAllowed(Boolean(result)); }).catch((cause) => { if (active) { setAllowed(false); setGateError(errorMessage(cause)); } });
-    return () => { active = false; };
+  const readAuthorization = useCallback(async () => {
+    const requestId = authorizationRequestRef.current + 1;
+    authorizationRequestRef.current = requestId;
+    if (!selected) { setAuthorization({ known: false, value: false, error: '' }); return; }
+    setAuthorization({ known: false, value: false, error: '' });
+    try {
+      const result = await readPatchLock(readClient, 'can_release', [numberValue(selected)]);
+      if (authorizationRequestRef.current !== requestId) return;
+      setAuthorization({ known: true, value: authorizationValue(result), error: '' });
+    } catch (cause) {
+      if (authorizationRequestRef.current !== requestId) return;
+      setAuthorization({ known: false, value: false, error: errorMessage(cause) });
+    }
   }, [readClient, selected]);
+  useEffect(() => { readAuthorization(); }, [readAuthorization]);
   const record = records.find((item) => String(item.id) === String(selected));
+  const authorizationUnknown = Boolean(selected) && !authorization.known;
+  const allowed = authorization.known && authorization.value;
   const deniedLabel = record?.release.blocked ? 'PERMANENT QUARANTINE' : 'RELEASE NOT CLEARED';
-  return <section className="page-section gate-page"><PageHeading eyebrow="04 / EXTERNAL CONSUMER" title="DEPLOYMENT AUTHORIZATION"><button type="button" className="text-button" onClick={load}>REFRESH AUTHORIZATION</button></PageHeading><p className="gate-intro">This is a read-only authorization terminal. PatchLock does not perform deployment from this browser.</p><div className="gate-flow"><div><span>01</span><strong>CI / CD</strong></div><b>&gt;</b><div><span>02</span><strong>PatchLockReleaseGate</strong></div><b>&gt;</b><div><span>03</span><strong>can_release()</strong></div><b>&gt;</b><div><span>04</span><strong>DEPLOY / BLOCK</strong></div></div>{state.loading ? <LoadingState label="READING BRADBURY STATE / AUTHORIZATION" variant="gate" /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : records.length === 0 ? <div className="empty-state"><strong>NO RELEASE TO AUTHORIZE</strong><span>Register a release before reading the gate.</span></div> : <div className="gate-console"><Field label="SELECT REGISTERED RELEASE"><select value={selected} onChange={(event) => setSelected(event.target.value)}>{records.map((item) => <option key={item.id} value={item.id}>RELEASE {formatReleaseId(item.id)} / {item.release.project_name} {item.release.version}</option>)}</select></Field><div className={'gate-result ' + (allowed ? 'is-authorized' : 'is-blocked')} role={gateError ? 'alert' : 'status'} aria-live="polite"><span className="eyebrow">{gateError ? 'AUTHORIZATION CHECK FAILED / FAIL CLOSED' : 'AUTHORITATIVE READ / NO DEPLOYMENT EXECUTED'}</span><strong>{allowed ? 'DEPLOYMENT AUTHORIZED' : 'DEPLOYMENT DENIED'}</strong><b>{allowed ? 'EXACT RELEASE IS ELIGIBLE' : deniedLabel}</b><code>can_release({selected}) = {allowed ? 'TRUE' : 'FALSE'}</code>{gateError && <p>{gateError}</p>}</div>{record && <div className="gate-record"><div><span>PROJECT / VERSION</span><strong>{record.release.project_name} / {record.release.version}</strong></div><div><span>LATEST VERDICT</span><strong>{record.release.latest_verdict} / {record.release.latest_release_binding}</strong></div><div><span>ACTIVE</span><strong>{record.release.active ? 'YES' : 'NO'}</strong></div><div><span>BLOCKED</span><strong>{record.release.blocked ? 'PERMANENT' : 'NO'}</strong></div></div>}<div className="adapter-note"><strong>REFERENCE ENFORCEMENT</strong><p><code>PatchLockReleaseGate</code> rereads <code>can_release(release_id)</code> before every protected deployment, fails closed on read errors or false authorization, and wraps downstream deployment failures separately. External systems must enforce this boundary.</p></div></div>}</section>;
+  return <section className="page-section gate-page"><PageHeading eyebrow="04 / EXTERNAL CONSUMER" title="DEPLOYMENT AUTHORIZATION"><button type="button" className="text-button" onClick={load}>REFRESH AUTHORIZATION</button></PageHeading><p className="gate-intro">This is a read-only authorization terminal. PatchLock does not perform deployment from this browser.</p><div className="gate-flow"><div><span>01</span><strong>CI / CD</strong></div><b>&gt;</b><div><span>02</span><strong>PatchLockReleaseGate</strong></div><b>&gt;</b><div><span>03</span><strong>can_release()</strong></div><b>&gt;</b><div><span>04</span><strong>DEPLOY / BLOCK</strong></div></div>{state.loading ? <LoadingState label="READING BRADBURY STATE / AUTHORIZATION" variant="gate" /> : state.error ? <ErrorState message={state.error} onRetry={load} /> : records.length === 0 ? <div className="empty-state"><strong>NO RELEASE TO AUTHORIZE</strong><span>Register a release before reading the gate.</span></div> : <div className="gate-console"><Field label="SELECT REGISTERED RELEASE"><select value={selected} onChange={(event) => setSelected(event.target.value)}>{records.map((item) => <option key={item.id} value={item.id}>RELEASE {formatReleaseId(item.id)} / {item.release.project_name} {item.release.version}</option>)}</select></Field><div className={'gate-result ' + (authorizationUnknown ? 'is-unknown' : allowed ? 'is-authorized' : 'is-blocked')} role={authorizationUnknown ? 'alert' : 'status'} aria-live="polite"><span className="eyebrow">{authorizationUnknown ? 'READ FAILED / AUTHORIZATION UNKNOWN' : 'AUTHORITATIVE READ / NO DEPLOYMENT EXECUTED'}</span><strong>{authorizationUnknown ? 'AUTHORIZATION UNKNOWN' : allowed ? 'DEPLOYMENT AUTHORIZED' : 'DEPLOYMENT DENIED'}</strong><b>{authorizationUnknown ? 'RETRY REQUIRED / FAIL CLOSED' : allowed ? 'EXACT RELEASE IS ELIGIBLE' : deniedLabel}</b><code>can_release({selected}) = {authorizationUnknown ? 'UNKNOWN' : allowed ? 'TRUE' : 'FALSE'}</code>{authorization.error && <p>{authorization.error}</p>}{authorizationUnknown && <button type="button" className="text-button" onClick={readAuthorization}>RETRY AUTHORIZATION READ</button>}</div>{record && <div className="gate-record"><div><span>PROJECT / VERSION</span><strong>{record.release.project_name} / {record.release.version}</strong></div><div><span>SEALED</span><strong>{record.release.sealed ? 'YES' : 'NO'}</strong></div><div><span>ACTIVE</span><strong>{record.release.active ? 'YES' : 'NO'}</strong></div><div><span>BLOCKED</span><strong>{record.release.blocked ? 'PERMANENT' : 'NO'}</strong></div></div>}<div className="adapter-note"><strong>REFERENCE ENFORCEMENT</strong><p><code>PatchLockReleaseGate</code> rereads <code>can_release(release_id)</code> before every protected deployment, fails closed on read errors or false authorization, and wraps downstream deployment failures separately. External systems must enforce this boundary.</p></div></div>}</section>;
 }
 
 function PolicyPage() {
   const sections = [
     ['EXACT RELEASE IDENTITY', 'A release is project, version, commit hash, artifact hash, manifest hash, and SBOM hash. These fields and the registering signer have no mutation path.'],
-    ['POLICY LOCKING', 'The release owner may revise policy before the first successful review. Each successful update increments a system-controlled version. The first successful review freezes the snapshot.'],
-    ['SOURCE SET LOCKING', 'The owner configures 1-14 exact HTTP(S) source strings. Reviews may select only exact frozen members, with no fuzzy matching or alternate spelling.'],
-    ['PERMISSIONLESS REVIEW', 'Anyone may submit a review claim, but no reviewer can inject an unregistered source or write a verdict. Only consensus-accepted CLEAR + BOUND on an active, unblocked release authorizes the downstream gate.'],
+    ['POLICY LOCKING', 'The release owner may revise policy before sealing. Each successful update increments a system-controlled version. Owner seal is irreversible and freezes the policy snapshot; review_started is a review-history field, not the locking mechanism.'],
+    ['SOURCE SET LOCKING', 'The owner configures 1-4 exact HTTP(S) source strings before sealing. Every sealed review submits the complete frozen set; there is no subset, superset, or alternate spelling choice.'],
+    ['PERMISSIONLESS REVIEW', 'Anyone may submit review metadata after the owner seals a release, but no reviewer can inject a source or write a verdict. Adjudication uses the sealed context plus fetched evidence, and only consensus-accepted CLEAR + BOUND on an active, unblocked release authorizes the downstream gate.'],
     ['RELEASE BINDING', 'Evidence must be reasonably tied to the registered build. CLEAR + PARTIAL or CLEAR + UNBOUND is not authorization. Weakly bound BLOCKED results are normalized conservatively.'],
     ['REPLAY PROTECTION', 'The contract fingerprints release identity, policy/source versions, exact URLs, statuses, and bounded bodies with deterministic SHA-256. A commitment cannot be reviewed twice.'],
     ['STICKY BLOCKING', 'A sufficiently bound BLOCKED review sets a permanent bit. Later favorable reviews cannot clear it. Rehabilitation requires a new release record and a new artifact identity.'],

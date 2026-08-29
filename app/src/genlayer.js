@@ -4,12 +4,12 @@ import { TransactionStatus } from 'genlayer-js/types';
 
 export const PATCHLOCK_NETWORK = 'testnetBradbury';
 export const PATCHLOCK_CHAIN_ID = testnetBradbury.id;
-const DEPLOYED_PATCHLOCK_ADDRESS = '0x92C621Ae9781c9b6695dfd5B6aeAe78b09cF7E71';
+const DEPLOYED_PATCHLOCK_ADDRESS = '0xB448eE56C2E84b17c1643B07C462D9bFfB414f27';
 export const PATCHLOCK_CONTRACT_ADDRESS = (import.meta.env.VITE_PATCHLOCK_CONTRACT_ADDRESS || DEPLOYED_PATCHLOCK_ADDRESS).trim();
 
 export const PATCHLOCK_METHODS = Object.freeze({
   views: ['get_release_count', 'get_review_count', 'get_release', 'get_review', 'can_release'],
-  writes: ['register_release', 'review_release', 'update_release_policy', 'update_evidence_sources', 'set_release_active'],
+  writes: ['register_release', 'seal_release', 'review_release', 'update_release_policy', 'update_evidence_sources', 'set_release_active'],
 });
 
 export const BRADBURY_CHAIN = testnetBradbury;
@@ -197,6 +197,7 @@ export function normalizeRelease(raw, id) {
     policy_version: numberValue(field(raw, 'policy_version', 'policyVersion')),
     evidence_sources: listValue(sources),
     source_set_version: numberValue(field(raw, 'source_set_version', 'sourceSetVersion')),
+    sealed: Boolean(field(raw, 'sealed')),
     review_started: Boolean(field(raw, 'review_started', 'reviewStarted')),
     review_count: numberValue(field(raw, 'review_count', 'reviewCount')),
     latest_verdict: textValue(field(raw, 'latest_verdict', 'latestVerdict'), 'UNDETERMINED'),
