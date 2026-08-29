@@ -82,6 +82,12 @@ function authorizationValue(value) {
   throw new Error('PatchLock can_release() returned an invalid authorization value.');
 }
 
+function sameCanonicalSourceSet(left, right) {
+  const leftCanonical = [...left].map(String).sort();
+  const rightCanonical = [...right].map(String).sort();
+  return arrayEqual(leftCanonical, rightCanonical);
+}
+
 function releaseState(release, allowed) {
   if (release.blocked) {
     return { tone: 'blocked', label: 'BLOCKED / PERMANENTLY QUARANTINED', detail: 'Permanent block' };
@@ -482,7 +488,7 @@ function OwnerControls({ release, account, readClient, write, onRefresh }) {
     }
   };
   if (!owner) return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS</span><StatusPill label="READ ONLY / NOT OWNER" tone="hold" /></div><p>Only the recorded release signer can change policy, evidence sources, sealing, or active state. This record is read-only for the connected account.</p></div>;
-  if (release.sealed) return <div className="owner-panel locked-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / SEALED</span><StatusPill label="SEALED / POLICY + SOURCES LOCKED" tone="caution" /></div><p>Owner sealing is irreversible. The policy, policy version, evidence sources, and source-set version are now frozen permanently. review_started records a persisted review; it is not the locking mechanism.</p>{release.blocked && <p className="warning-copy">This artifact is permanently blocked. There is no unblock, reset, pardon, or unseal control.</p>}<div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div><TransactionStatus state={tx} onCheck={() => checkRef.current?.()} /></div>;
+  if (release.sealed) return <div className="owner-panel locked-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / SEALED</span><StatusPill label="SEALED / POLICY + SOURCES LOCKED" tone="caution" /></div><p>Owner sealing is irreversible. The policy, policy version, evidence sources, and source-set version are now frozen permanently. review_started records a persisted review; it is not the locking mechanism.</p>{release.blocked && <p className="warning-copy">This artifact is permanently blocked. There is no unblock, reset, pardon, or unseal control.</p>}{error && <div className="error-state" role="alert"><strong>OWNER WRITE FAILED</strong><span>{error}</span></div>}<div className="active-control"><span>ACTIVE STATE</span><strong>{release.active ? 'ACTIVE' : 'INACTIVE'}</strong><button type="button" className="button secondary small-button" disabled={busy} onClick={() => run('set_release_active', [release.release_id, !release.active], (updated) => updated?.active === !release.active)}>{release.active ? 'DEACTIVATE' : 'ACTIVATE'}</button></div><TransactionStatus state={tx} onCheck={() => checkRef.current?.()} /></div>;
   return <div className="owner-panel"><div className="owner-panel-header"><span className="eyebrow">OWNER CONTROLS / UNSEALED</span><StatusPill label="UNSEALED / EDITABLE" tone="clear" /></div>
     <p>Policy and evidence sources remain editable for the release owner. SEAL RELEASE is irreversible and permanently freezes both snapshots; review is unavailable until sealing completes.</p>
     <div className="owner-control-grid"><div><Field label={'POLICY VERSION ' + release.policy_version}><textarea rows="5" value={policy} onChange={(event) => setPolicy(event.target.value)} disabled={!editable || busy} /></Field><button type="button" className="button secondary small-button" disabled={!editable || busy || !policy.trim() || policy === release.release_policy} onClick={() => run('update_release_policy', [release.release_id, policy.trim()], (updated) => updated && updated.policy_version === release.policy_version + 1 && updated.release_policy === policy.trim())}>UPDATE POLICY / +1</button></div>
@@ -555,8 +561,7 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
   const [busy, setBusy] = useState(false);
   const [tx, setTx] = useState(null);
   const checkRef = useRef(null);
-  const expectedSequenceRef = useRef(null);
-  const expectedGlobalReviewCountRef = useRef(null);
+  const confirmationRef = useRef(null);
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
@@ -568,7 +573,7 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
     finally { setLoading(false); }
   }, [id, readClient]);
   useEffect(() => { load(); }, [load]);
-  const confirmReview = useCallback(async (expectedSequence, expectedGlobalCount, hash) => {
+  const confirmReview = useCallback(async (snapshot, hash) => {
     setTx({ phase: 'confirming', hash });
     const found = await pollAuthoritative(
       async () => {
@@ -578,11 +583,18 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
         ]);
         const current = normalizeRelease(releaseRaw, id);
         const count = numberValue(countRaw);
-        if (!current || current.review_count < expectedSequence || count < expectedGlobalCount) return null;
-        for (let reviewId = count; reviewId >= 1; reviewId -= 1) {
+        if (!current || current.review_count <= snapshot.baselineReleaseReviewCount || count <= snapshot.baselineGlobalReviewCount) return null;
+        for (let reviewId = snapshot.baselineGlobalReviewCount + 1; reviewId <= count; reviewId += 1) {
           const raw = await readPatchLock(readClient, 'get_review', [reviewId]);
           const review = normalizeReview(raw, reviewId);
-          if (review && review.release_id === id && review.sequence_number === expectedSequence) return review;
+          if (
+            review &&
+            review.release_id === id &&
+            review.sequence_number > snapshot.baselineReleaseReviewCount &&
+            review.title === snapshot.title &&
+            review.claimed_risk === snapshot.claimedRisk &&
+            sameCanonicalSourceSet(review.evidence_urls, snapshot.evidenceUrls)
+          ) return review;
         }
         return null;
       },
@@ -600,6 +612,7 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
     event.preventDefault();
     if (!release || !release.sealed || !account || !title.trim() || !risk.trim() || busy) return;
     setBusy(true); setError('');
+    confirmationRef.current = null;
     try {
       const [currentRaw, globalCountRaw] = await Promise.all([
         readPatchLock(readClient, 'get_release', [id]),
@@ -608,19 +621,26 @@ function ReviewPage({ id, readClient, account, write, navigate }) {
       const current = normalizeRelease(currentRaw, id);
       if (!current) throw new Error('Release ' + id + ' was not found during confirmation snapshot.');
       if (!current.sealed) throw new Error('Release must be sealed before review.');
-      const expectedSequence = current.review_count + 1;
-      const expectedGlobalCount = numberValue(globalCountRaw) + 1;
-      expectedSequenceRef.current = expectedSequence;
-      expectedGlobalReviewCountRef.current = expectedGlobalCount;
-      const result = await write('review_release', [id, title.trim(), risk.trim(), [...current.evidence_sources]], {
+      const submittedTitle = title.trim();
+      const submittedClaimedRisk = risk.trim();
+      const submittedEvidenceUrls = [...current.evidence_sources];
+      const confirmation = {
+        baselineReleaseReviewCount: current.review_count,
+        baselineGlobalReviewCount: numberValue(globalCountRaw),
+        title: submittedTitle,
+        claimedRisk: submittedClaimedRisk,
+        evidenceUrls: submittedEvidenceUrls,
+      };
+      confirmationRef.current = confirmation;
+      const result = await write('review_release', [id, submittedTitle, submittedClaimedRisk, submittedEvidenceUrls], {
         onAwaiting: () => setTx({ phase: 'awaiting' }),
         onSubmitted: (hash) => setTx({ phase: 'submitted', hash }),
         onEvaluating: (hash) => setTx({ phase: 'evaluating', hash }),
       });
-      if (!consensusReceiptAccepted(result)) { setTx({ phase: 'unresolved', hash: result.hash }); checkRef.current = () => confirmReview(expectedSequence, expectedGlobalCount, result.hash); return; }
-      setTx({ phase: 'accepted', hash: result.hash }); checkRef.current = () => confirmReview(expectedSequence, expectedGlobalCount, result.hash); await confirmReview(expectedSequence, expectedGlobalCount, result.hash);
+      if (!consensusReceiptAccepted(result)) { setTx({ phase: 'unresolved', hash: result.hash }); checkRef.current = () => confirmReview(confirmation, result.hash); return; }
+      setTx({ phase: 'accepted', hash: result.hash }); checkRef.current = () => confirmReview(confirmation, result.hash); await confirmReview(confirmation, result.hash);
     } catch (cause) {
-      if (cause?.transactionHash) { setTx({ phase: 'unresolved', hash: cause.transactionHash }); checkRef.current = () => confirmReview(expectedSequenceRef.current, expectedGlobalReviewCountRef.current, cause.transactionHash); }
+      if (cause?.transactionHash && confirmationRef.current) { setTx({ phase: 'unresolved', hash: cause.transactionHash }); checkRef.current = () => confirmReview(confirmationRef.current, cause.transactionHash); }
       else setError(transactionErrorMessage(cause));
     } finally { setBusy(false); }
   };
