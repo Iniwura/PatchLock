@@ -19,6 +19,28 @@ function capture() {
   };
 }
 
+test('help is always non-authorizing and never performs an RPC read', async () => {
+  for (const argv of [['--help'], ['-h'], ['2', '--help']]) {
+    const stdout = capture();
+    const stderr = capture();
+    let reads = 0;
+
+    const exitCode = await runCli(argv, {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      readContractImpl: async () => {
+        reads += 1;
+        return true;
+      },
+    });
+
+    assert.equal(exitCode, EXIT_CODES.ERROR);
+    assert.equal(reads, 0);
+    assert.match(stdout.lines.join(''), /Usage:/);
+    assert.deepEqual(stderr.lines, []);
+  }
+});
+
 test('explicit true authorizes and uses a fresh latest-nonfinal can_release read', async () => {
   const stdout = capture();
   const stderr = capture();

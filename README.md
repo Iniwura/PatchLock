@@ -183,7 +183,7 @@ npm run release-gate -- 2
 
 It uses the installed `genlayer-js` SDK to perform one fresh public `can_release(2)` read on GenLayer Bradbury with `transactionHashVariant: latest-nonfinal`. The default contract is `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`. Configuration can be overridden with `PATCHLOCK_CONTRACT_ADDRESS`, `PATCHLOCK_NETWORK`, and `PATCHLOCK_RPC_URL`, or with `--contract-address`, `--network`, and `--rpc-url` options. The CLI uses no wallet, cache, deployment action, or inferred verdict state.
 
-Exit code `0` is reserved for an explicit boolean `true`. Exit code `1` is a confirmed boolean `false`. Invalid input, a non-boolean response, or any RPC/read failure returns exit code `2` and prints `AUTHORIZATION UNKNOWN / READ FAILED` for read failures. Protected pipelines must invoke this gate immediately before the protected deployment step and must stop on every nonzero result. The workflow example at `.github/workflows/patchlock-release-gate.yml` only reaches a placeholder step after authorization; it makes no production deployment claim. The browser frontend is informational and is not a deployment executor.
+Exit code `0` is reserved exclusively for an explicit boolean `true` returned by a live `can_release(release_id)` read. Exit code `1` is a confirmed boolean `false`. Exit code `2` covers every other condition, including `--help`/`-h`, invalid or missing release ids, malformed configuration, non-boolean results, and RPC/read failures; read failures print `AUTHORIZATION UNKNOWN / READ FAILED`. Workflow-dispatch input is untrusted data and is passed through the gate step environment to a fixed shell command; the CLI validates it as a positive integer. Protected pipelines must invoke this gate immediately before the protected deployment step and must stop on every nonzero result. The workflow example at `.github/workflows/patchlock-release-gate.yml` only reaches a placeholder step after authorization; it makes no production deployment claim. There is no wallet, authorization caching, or verdict inference. The browser frontend is informational and is not a deployment executor.
 
 
 ## Testing
@@ -224,7 +224,6 @@ The UI preserves the contract's security model: exact release identity is readab
 **BRADBURY / HARDENED / CANONICAL.**
 
 - Network: Bradbury
-- Current repository canonical commit: `5c3f4539734d91d04ea02a9e0edbb5430bd2b801`
 - Hardened canonical contract: `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`
 - Deployment transaction: `0x234cc067d8f5d53a643d636658510f24b742a8e9e845639dd7e718c2ccbc50fe`
 - Source commit: `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`

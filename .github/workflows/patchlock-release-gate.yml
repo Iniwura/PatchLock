@@ -8,9 +8,14 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
+
 jobs:
   authorize:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       PATCHLOCK_CONTRACT_ADDRESS: 0xB448eE56C2E84b17c1643B07C462D9bFfB414f27
       PATCHLOCK_NETWORK: testnetBradbury
@@ -26,7 +31,9 @@ jobs:
       - run: npm ci
 
       - name: Read live PatchLock authorization
-        run: npm run release-gate -- "${{ inputs.release_id }}"
+        env:
+          PATCHLOCK_RELEASE_ID: ${{ inputs.release_id }}
+        run: npm run release-gate -- "$PATCHLOCK_RELEASE_ID"
 
       - name: Protected deployment placeholder
         run: echo "PatchLock authorization passed; a protected deployment would be allowed here."

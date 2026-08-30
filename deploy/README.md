@@ -5,7 +5,6 @@ The hardened PatchLock contract is deployed on GenLayer Bradbury.
 - Hardened canonical contract: `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`
 - Deployment transaction: `0x234cc067d8f5d53a643d636658510f24b742a8e9e845639dd7e718c2ccbc50fe`
 - Canonical hardened source commit: `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`
-- Current repository canonical commit: `5c3f4539734d91d04ea02a9e0edbb5430bd2b801`
 - Hardened deployed source was retrieved and verified.
 
 **LEGACY / PRE-STEWARD-HARDENING.**
@@ -25,7 +24,7 @@ Protected pipelines should invoke the repository's real read-only gate immediate
 
 `npm run release-gate -- 2`
 
-The gate uses the installed `genlayer-js` SDK and a fresh Bradbury `can_release(2)` read with `latest-nonfinal` behavior. Its default contract is `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`; `PATCHLOCK_CONTRACT_ADDRESS`, `PATCHLOCK_NETWORK`, `PATCHLOCK_RPC_URL`, or the documented CLI options can override configuration. Exit `0` requires an explicit boolean `true`; exit `1` is a confirmed boolean `false`; exit `2` covers invalid input, non-boolean results, and read failures. Read failures are `AUTHORIZATION UNKNOWN / READ FAILED`, never a denial or authorization. There is no wallet, cache, fake deployment, or verdict inference. The browser is informational, not an execution boundary.
+The gate uses the installed `genlayer-js` SDK and a fresh Bradbury `can_release(2)` read with `latest-nonfinal` behavior. Its default contract is `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`; `PATCHLOCK_CONTRACT_ADDRESS`, `PATCHLOCK_NETWORK`, `PATCHLOCK_RPC_URL`, or the documented CLI options can override configuration. Exit `0` is reserved exclusively for an explicit boolean `true` returned by a live read; exit `1` is a confirmed boolean `false`; exit `2` covers every other condition, including `--help`/`-h`, invalid or missing release ids, malformed configuration, non-boolean results, and read failures. Read failures are `AUTHORIZATION UNKNOWN / READ FAILED`, never a denial or authorization. Workflow-dispatch input is untrusted data and is passed through the gate step environment to a fixed shell command; the CLI validates it as a positive integer. There is no wallet, authorization caching, fake deployment, or verdict inference. The browser is informational, not an execution boundary.
 
 ## Live Bradbury evidence
 

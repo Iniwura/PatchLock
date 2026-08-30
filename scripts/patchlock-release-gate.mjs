@@ -233,7 +233,7 @@ export async function runCli(argv = process.argv.slice(2), dependencies = {}) {
 
   if (parsed.help) {
     writeLine(stdout, USAGE);
-    return EXIT_CODES.AUTHORIZED;
+    return EXIT_CODES.ERROR;
   }
 
   try {
