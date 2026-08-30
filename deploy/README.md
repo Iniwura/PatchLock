@@ -5,6 +5,7 @@ The hardened PatchLock contract is deployed on GenLayer Bradbury.
 - Hardened canonical contract: `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`
 - Deployment transaction: `0x234cc067d8f5d53a643d636658510f24b742a8e9e845639dd7e718c2ccbc50fe`
 - Canonical hardened source commit: `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`
+- Current repository canonical commit: `5c3f4539734d91d04ea02a9e0edbb5430bd2b801`
 - Hardened deployed source was retrieved and verified.
 
 **LEGACY / PRE-STEWARD-HARDENING.**
@@ -18,12 +19,22 @@ The live hardened lifecycle is:
 
 Registration creates an unsealed release. The owner can edit policy and evidence sources until the irreversible seal. Sealing permanently locks both snapshots; it does not authorize release. Reviews are permissionless only after sealing and must use the complete frozen source set. Deployment authorization remains a read-only, contract-driven `can_release(release_id)` check.
 
+## Durable release gate
+
+Protected pipelines should invoke the repository's real read-only gate immediately before a protected deployment:
+
+`npm run release-gate -- 2`
+
+The gate uses the installed `genlayer-js` SDK and a fresh Bradbury `can_release(2)` read with `latest-nonfinal` behavior. Its default contract is `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`; `PATCHLOCK_CONTRACT_ADDRESS`, `PATCHLOCK_NETWORK`, `PATCHLOCK_RPC_URL`, or the documented CLI options can override configuration. Exit `0` requires an explicit boolean `true`; exit `1` is a confirmed boolean `false`; exit `2` covers invalid input, non-boolean results, and read failures. Read failures are `AUTHORIZATION UNKNOWN / READ FAILED`, never a denial or authorization. There is no wallet, cache, fake deployment, or verdict inference. The browser is informational, not an execution boundary.
+
 ## Live Bradbury evidence
 
 - Release 1 registration succeeded.
 - Release 1 seal succeeded.
 - Two review attempts ended `LEADER_TIMEOUT` with no validator vote.
 - Authoritative `review_count` was 0 after the first timeout and remained 0 after the later retry.
+- Release 1 is the earlier smoke identity, sealed with `review_count = 0`, and has no accepted review.
+- Release 2 is the corrected identity: project `PatchLock Hardened Steward`, version `1.0.0`, commit `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`, artifact `gitblob-5fd273781afdc9ef060a4f04b6ef83dc2e7bbbb7`, sealed, `review_started = false`, `review_count = 0`, and `can_release(2) = false` after the unresolved review attempt.
 - The hardened deployment has not been live-proven to produce `CLEAR / BOUND` or `can_release = true`.
 - Bradbury review smoke remains pending due network/consensus availability.
 - Local regression coverage proves the positive authorization and sticky-block paths.

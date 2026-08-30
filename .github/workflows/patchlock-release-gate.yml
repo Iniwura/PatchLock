@@ -1,0 +1,32 @@
+name: PatchLock release authorization
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: PatchLock release id to authorize
+        required: true
+        type: string
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    env:
+      PATCHLOCK_CONTRACT_ADDRESS: 0xB448eE56C2E84b17c1643B07C462D9bFfB414f27
+      PATCHLOCK_NETWORK: testnetBradbury
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install locked Node dependencies
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Read live PatchLock authorization
+        run: npm run release-gate -- "${{ inputs.release_id }}"
+
+      - name: Protected deployment placeholder
+        run: echo "PatchLock authorization passed; a protected deployment would be allowed here."

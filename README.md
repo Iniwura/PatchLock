@@ -173,13 +173,27 @@ Only an unprotected external integration could do so. Protected execution must c
 **G. Can stale cached authorization allow deployment?**
 The reference gate does not cache. It rereads authorization on every execute call and fails closed on read errors.
 
+### Durable deployment consumer
+
+This repository also provides a real Node CLI for the CI/deployment boundary:
+
+~~~text
+npm run release-gate -- 2
+~~~
+
+It uses the installed `genlayer-js` SDK to perform one fresh public `can_release(2)` read on GenLayer Bradbury with `transactionHashVariant: latest-nonfinal`. The default contract is `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`. Configuration can be overridden with `PATCHLOCK_CONTRACT_ADDRESS`, `PATCHLOCK_NETWORK`, and `PATCHLOCK_RPC_URL`, or with `--contract-address`, `--network`, and `--rpc-url` options. The CLI uses no wallet, cache, deployment action, or inferred verdict state.
+
+Exit code `0` is reserved for an explicit boolean `true`. Exit code `1` is a confirmed boolean `false`. Invalid input, a non-boolean response, or any RPC/read failure returns exit code `2` and prints `AUTHORIZATION UNKNOWN / READ FAILED` for read failures. Protected pipelines must invoke this gate immediately before the protected deployment step and must stop on every nonzero result. The workflow example at `.github/workflows/patchlock-release-gate.yml` only reaches a placeholder step after authorization; it makes no production deployment claim. The browser frontend is informational and is not a deployment executor.
+
+
 ## Testing
 
-The suite uses the installed Direct Mode environment and has separate contract and execution-gate coverage. It includes registration validation, identity immutability, policy/source locking, provenance and URL behavior, strict schema checks, all verdicts, authorization, sticky blocking, ownership, history, and fail-closed execution.
+The suite uses the installed Direct Mode environment and has separate contract, execution-gate, and durable CLI coverage. It includes registration validation, identity immutability, policy/source locking, provenance and URL behavior, strict schema checks, all verdicts, authorization, sticky blocking, ownership, history, fail-closed execution, strict CLI responses, and fresh-read behavior.
 
 From this project, with the compatible WSL environment:
 
 ~~~text
+node --test test/patchlock-release-gate.test.mjs
 gltest -q
 python -m pytest -q
 genvm-lint lint contracts/patchlock.py
@@ -210,6 +224,7 @@ The UI preserves the contract's security model: exact release identity is readab
 **BRADBURY / HARDENED / CANONICAL.**
 
 - Network: Bradbury
+- Current repository canonical commit: `5c3f4539734d91d04ea02a9e0edbb5430bd2b801`
 - Hardened canonical contract: `0xB448eE56C2E84b17c1643B07C462D9bFfB414f27`
 - Deployment transaction: `0x234cc067d8f5d53a643d636658510f24b742a8e9e845639dd7e718c2ccbc50fe`
 - Source commit: `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`
@@ -231,6 +246,8 @@ The hardened Bradbury smoke evidence is intentionally limited:
 - Release 1 seal succeeded on the hardened contract.
 - Two review attempts ended `LEADER_TIMEOUT` with no validator vote.
 - Authoritative state showed `review_count = 0` after the first timeout and remained `review_count = 0` after the later retry.
+- Release 1 is the old smoke identity and remains sealed with `review_count = 0`; it has no accepted review and `can_release(1) = false`.
+- Release 2 is the corrected live identity: project `PatchLock Hardened Steward`, version `1.0.0`, commit `72ecb3e757ab2ad21ddf675fc2f996aa88cd835e`, artifact `gitblob-5fd273781afdc9ef060a4f04b6ef83dc2e7bbbb7`, sealed, `review_started = false`, `review_count = 0`, and `can_release(2) = false` after the unresolved review attempt.
 - The hardened deployment has not been live-proven to produce `CLEAR / BOUND` or `can_release = true`.
 - The Bradbury review smoke remains pending because network/consensus availability did not provide an accepted review.
 - The local regression suite proves the positive authorization path and the sticky-block path.
@@ -256,6 +273,9 @@ contracts/patchlock.py              PatchLock Intelligent Contract
 test/test_patchlock.py              Direct Mode adversarial contract suite
 test/test_execution_gate.py         Repository-level gate tests
 execution/patchlock_release_gate.py Reference fail-closed consumer
+scripts/patchlock-release-gate.mjs Durable public onchain authorization CLI
+test/patchlock-release-gate.test.mjs Deterministic CLI gate tests
+.github/workflows/patchlock-release-gate.yml CI authorization boundary example
 deploy/deployScript.ts              Non-executed Bradbury deployment helper
 pytest.ini                          Direct Mode test path configuration
 ~~~
